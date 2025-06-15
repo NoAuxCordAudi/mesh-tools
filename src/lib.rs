@@ -79,6 +79,7 @@ mod builder_texture;          // Implementations for texture handling
 mod builder_material;         // Implementations for material handling
 mod builder_material_specular; // Implementations for specular material handling
 mod builder_animation;        // Implementations for animation handling
+mod builder_skin;             // Implementations for skin handling
 
 // Re-exports
 pub use error::{GltfError, Result};

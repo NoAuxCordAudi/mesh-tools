@@ -52,6 +52,9 @@ pub struct Gltf {
     pub samplers: Option<Vec<Sampler>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skins: Option<Vec<Skin>>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub animations: Option<Vec<Animation>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,6 +102,9 @@ pub struct Node {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<usize>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skin: Option<usize>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation: Option<[f32; 3]>,
@@ -414,4 +420,26 @@ pub struct PbrSpecularGlossiness {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "specularGlossinessTexture")]
     pub specular_glossiness_texture: Option<TextureInfo>,
+}
+
+/// Represents a glTF skin for skeletal animation
+///
+/// A skin defines a set of joints and inverse bind matrices that transform
+/// the geometry from model space to joint space for skeletal animation.
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Skin {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    
+    /// Joints define the skeleton structure by node indices
+    pub joints: Vec<usize>,
+    
+    /// Index of the accessor containing inverse bind matrices
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inverseBindMatrices")]
+    pub inverse_bind_matrices: Option<usize>,
+    
+    /// Index of the skeleton node (root joint)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skeleton: Option<usize>,
 }

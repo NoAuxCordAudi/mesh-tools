@@ -50,6 +50,12 @@ impl GltfBuilder {
         gltf.accessors = Some(Vec::new());
         gltf.buffer_views = Some(Vec::new());
         gltf.buffers = Some(Vec::new());
+        gltf.materials = Some(Vec::new());
+        gltf.textures = Some(Vec::new());
+        gltf.images = Some(Vec::new());
+        gltf.animations = Some(Vec::new());
+        gltf.samplers = Some(Vec::new());
+        gltf.skins = Some(Vec::new());
         
         // Create initial buffer in buffer list
         let buffer = Buffer {
@@ -98,11 +104,12 @@ impl GltfBuilder {
         let node = Node {
             name,
             mesh,
+            skin: None,
+            children: None,
             translation,
             rotation,
             scale,
             matrix: None,
-            children: None,
         };
         
         if let Some(nodes) = &mut self.gltf.nodes {
@@ -122,11 +129,12 @@ impl GltfBuilder {
         let node = Node {
             name,
             mesh,
+            skin: None,
+            children: Some(children),
             translation,
             rotation,
             scale,
             matrix: None,
-            children: Some(children),
         };
         
         if let Some(nodes) = &mut self.gltf.nodes {

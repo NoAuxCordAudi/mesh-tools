@@ -11,6 +11,7 @@
 //! - Normal vectors
 //! - Texture coordinates (UV mapping)
 //! - Material references
+//! - Joint weights
 //!
 //! The module also provides helper functions for processing mesh data such as calculating
 //! attribute mappings for glTF primitives.
@@ -38,6 +39,8 @@ pub struct MeshBuilder {
     indices: Vec<u16>,
     normals: Option<Vec<f32>>,
     texcoords: Option<Vec<Vec<f32>>>,
+    joints: Option<Vec<[u16; 4]>>,
+    weights: Option<Vec<[f32; 4]>>,
     material: Option<usize>,
     name: Option<String>,
 }
@@ -51,6 +54,8 @@ impl MeshBuilder {
             indices: Vec::new(),
             normals: None,
             texcoords: None,
+            joints: None,
+            weights: None,
             material: None,
             name,
         }
@@ -103,35 +108,41 @@ impl MeshBuilder {
         self
     }
     
+    /// Set the joints for the mesh
+    pub fn with_joints(mut self, joints: Vec<[u16; 4]>) -> Self {
+        self.joints = Some(joints);
+        self
+    }
+    
+    /// Set the weights for the mesh
+    pub fn with_weights(mut self, weights: Vec<[f32; 4]>) -> Self {
+        self.weights = Some(weights);
+        self
+    }
+    
     /// Build the mesh
     pub fn build(self) -> Mesh {
         let mut mesh = Mesh::default();
         mesh.name = self.name;
         
-        let normals_ref = self.normals.as_deref();
-        
-        if let Some(mut builder) = self.builder {
-            let primitive = builder(
+        if let Some(mut builder_fn) = self.builder {
+            let primitive = builder_fn(
                 &self.positions,
-                &self.indices,
-                normals_ref,
-                self.texcoords,
-                self.material,
+                &self.indices, 
+                self.normals.as_deref(),
+                self.texcoords.clone(),
+                self.material
             );
-            mesh.primitives.push(primitive);
+            mesh.primitives = vec![primitive];
         } else {
-            // Default implementation if no builder provided
-            let attributes = HashMap::new();
-            // Would need accessor indices which are typically provided by GltfBuilder
-            
-            let primitive = Primitive {
-                attributes,
-                indices: None, // Would need accessor index
+            // Use default primitive building if no custom builder provided
+            let primitive = crate::models::Primitive {
+                attributes: std::collections::HashMap::new(),
+                indices: None,
                 material: self.material,
-                mode: None,    // Default to triangles
+                mode: None,
             };
-            
-            mesh.primitives.push(primitive);
+            mesh.primitives = vec![primitive];
         }
         
         mesh

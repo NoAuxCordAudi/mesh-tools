@@ -29,6 +29,9 @@ pub enum GltfError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
     
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    
     #[error("Invalid index")]
     InvalidIndex,
     
