@@ -172,7 +172,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,
         None,
         vec![spoke1, spoke2, spoke3, spoke4]
-    );
+    )?;
     
     // Add the hub as a separate node (could also be part of the hierarchy creation)
     let hub = builder.add_node(

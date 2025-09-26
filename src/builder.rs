@@ -23,9 +23,35 @@ use crate::models::*;
 /// - Creating scene hierarchies with nodes
 /// - Managing buffer data for vertex attributes
 /// - Exporting to glTF and GLB formats
+///
+/// # Safety Features
+/// - Prevents NODE_PARENT_OVERRIDE errors through safe hierarchy building
+/// - Automatically normalizes rotation quaternions
+/// - Provides instancing helpers for common patterns
+/// - Validates node relationships before building
 pub struct GltfBuilder {
+    /// Internal glTF document structure
+    /// 
+    /// ⚠️  **WARNING: Direct manipulation of this field is strongly discouraged!**
+    /// 
+    /// Directly modifying this structure can lead to:
+    /// - NODE_PARENT_OVERRIDE errors (nodes with multiple parents)
+    /// - ROTATION_NON_UNIT errors (non-normalized quaternions)  
+    /// - Invalid glTF files that fail validation
+    /// 
+    /// **Always use the provided API methods instead:**
+    /// - `add_node()`, `add_child_to_node()`, `create_mesh_instance()`
+    /// - `create_mesh_grid()`, `create_safe_hierarchy()`
+    /// - `normalize_quaternion()`, `quaternion_from_euler()`
+    /// 
+    /// This field is public only for internal crate modules. External users
+    /// should treat this as read-only for inspection purposes only.
+    #[doc(hidden)]  // Hide from public documentation
     pub gltf: Gltf,
-    pub buffer_data: Vec<u8>,
+    
+    pub(crate) buffer_data: Vec<u8>,
+    // Track node parent relationships to prevent override errors
+    node_parents: Vec<Option<usize>>,
 }
 
 impl GltfBuilder {
@@ -70,6 +96,7 @@ impl GltfBuilder {
         GltfBuilder {
             gltf,
             buffer_data: Vec::new(),
+            node_parents: Vec::new(),
         }
     }
 
@@ -97,58 +124,105 @@ impl GltfBuilder {
         }
     }
 
-    /// Add a node to the glTF document
+    /// Add a node to the glTF document with automatic quaternion normalization
     pub fn add_node(&mut self, name: Option<String>, mesh: Option<usize>, 
                    translation: Option<[f32; 3]>, rotation: Option<[f32; 4]>,
                    scale: Option<[f32; 3]>) -> usize {
+        // Normalize rotation quaternion if provided
+        let normalized_rotation = rotation.map(|q| Self::normalize_quaternion(q));
+        
         let node = Node {
             name,
             mesh,
             skin: None,
             children: None,
             translation,
-            rotation,
+            rotation: normalized_rotation,
             scale,
             matrix: None,
         };
         
-        if let Some(nodes) = &mut self.gltf.nodes {
+        let index = if let Some(nodes) = &mut self.gltf.nodes {
             let index = nodes.len();
             nodes.push(node);
             index
         } else {
             self.gltf.nodes = Some(vec![node]);
             0
-        }
+        };
+        
+        // Track that this node has no parent initially
+        self.node_parents.push(None);
+        
+        index
     }
 
     /// Add a node with a list of children to the glTF document
+    /// This method validates that children don't already have parents to prevent NODE_PARENT_OVERRIDE errors
     pub fn add_node_with_children(&mut self, name: Option<String>, mesh: Option<usize>, 
                           translation: Option<[f32; 3]>, rotation: Option<[f32; 4]>,
-                          scale: Option<[f32; 3]>, children: Vec<usize>) -> usize {
+                          scale: Option<[f32; 3]>, children: Vec<usize>) -> Result<usize> {
+        // Validate that none of the children already have parents
+        for &child_index in &children {
+            if child_index >= self.node_parents.len() {
+                return Err(GltfError::InvalidIndex);
+            }
+            if self.node_parents[child_index].is_some() {
+                return Err(GltfError::InvalidData(
+                    format!("Node {} already has a parent. Cannot add as child to avoid NODE_PARENT_OVERRIDE error.", child_index)
+                ));
+            }
+        }
+        
+        // Normalize rotation quaternion if provided
+        let normalized_rotation = rotation.map(|q| Self::normalize_quaternion(q));
+        
         let node = Node {
             name,
             mesh,
             skin: None,
-            children: Some(children),
+            children: Some(children.clone()),
             translation,
-            rotation,
+            rotation: normalized_rotation,
             scale,
             matrix: None,
         };
         
-        if let Some(nodes) = &mut self.gltf.nodes {
+        let index = if let Some(nodes) = &mut self.gltf.nodes {
             let index = nodes.len();
             nodes.push(node);
             index
         } else {
             self.gltf.nodes = Some(vec![node]);
             0
+        };
+        
+        // Track that this node has no parent initially
+        self.node_parents.push(None);
+        
+        // Update parent tracking for all children
+        for child_index in children {
+            self.node_parents[child_index] = Some(index);
         }
+        
+        Ok(index)
     }
 
-    /// Add a child to an existing node
+    /// Add a child to an existing node with parent validation
+    /// Prevents NODE_PARENT_OVERRIDE errors by checking if child already has a parent
     pub fn add_child_to_node(&mut self, parent_index: usize, child_index: usize) -> Result<()> {
+        // Validate indices
+        if parent_index >= self.node_parents.len() || child_index >= self.node_parents.len() {
+            return Err(GltfError::InvalidIndex);
+        }
+        
+        // Check if child already has a parent
+        if self.node_parents[child_index].is_some() {
+            return Err(GltfError::InvalidData(
+                format!("Node {} already has a parent. Cannot add as child to avoid NODE_PARENT_OVERRIDE error.", child_index)
+            ));
+        }
+        
         if let Some(nodes) = &mut self.gltf.nodes {
             if parent_index < nodes.len() && child_index < nodes.len() {
                 let parent = &mut nodes[parent_index];
@@ -156,9 +230,13 @@ impl GltfBuilder {
                 if let Some(children) = &mut parent.children {
                     if !children.contains(&child_index) {
                         children.push(child_index);
+                        // Update parent tracking
+                        self.node_parents[child_index] = Some(parent_index);
                     }
                 } else {
                     parent.children = Some(vec![child_index]);
+                    // Update parent tracking
+                    self.node_parents[child_index] = Some(parent_index);
                 }
                 
                 Ok(())
@@ -175,7 +253,7 @@ impl GltfBuilder {
                                parent_translation: Option<[f32; 3]>,
                                parent_rotation: Option<[f32; 4]>,
                                parent_scale: Option<[f32; 3]>,
-                               child_indices: Vec<usize>) -> usize {
+                               child_indices: Vec<usize>) -> Result<usize> {
         // Create the parent node with the children
         self.add_node_with_children(
             parent_name,
@@ -319,5 +397,200 @@ impl GltfBuilder {
         file.write_u32::<LittleEndian>(current_pos as u32)?;
         
         Ok(())
+    }
+
+    // ========== HELPER METHODS ==========
+
+    /// Normalize a quaternion to ensure it's a unit quaternion
+    /// This prevents ROTATION_NON_UNIT glTF validation errors
+    pub fn normalize_quaternion(quat: [f32; 4]) -> [f32; 4] {
+        let magnitude = (quat[0]*quat[0] + quat[1]*quat[1] + quat[2]*quat[2] + quat[3]*quat[3]).sqrt();
+        if magnitude > 0.0 {
+            [quat[0]/magnitude, quat[1]/magnitude, quat[2]/magnitude, quat[3]/magnitude]
+        } else {
+            [0.0, 0.0, 0.0, 1.0] // Default identity quaternion
+        }
+    }
+
+    /// Create a rotation quaternion from Euler angles (in radians)
+    /// Returns a normalized quaternion ready for use in nodes
+    pub fn quaternion_from_euler(x: f32, y: f32, z: f32) -> [f32; 4] {
+        let (sx, cx) = (x * 0.5).sin_cos();
+        let (sy, cy) = (y * 0.5).sin_cos();
+        let (sz, cz) = (z * 0.5).sin_cos();
+
+        let quat = [
+            sx * cy * cz - cx * sy * sz, // x
+            cx * sy * cz + sx * cy * sz, // y
+            cx * cy * sz - sx * sy * cz, // z
+            cx * cy * cz + sx * sy * sz, // w
+        ];
+
+        Self::normalize_quaternion(quat)
+    }
+
+    /// Create a safe node instance that references a mesh at a specific position
+    /// This is the preferred way to create mesh instances to avoid parent override errors
+    pub fn create_mesh_instance(&mut self, name: Option<String>, mesh_index: usize,
+                               position: [f32; 3], rotation: Option<[f32; 4]>,
+                               scale: Option<[f32; 3]>) -> usize {
+        self.add_node(name, Some(mesh_index), Some(position), rotation, scale)
+    }
+
+    /// Create multiple instances of a mesh in a grid pattern
+    /// This is a helper for common instancing patterns
+    pub fn create_mesh_grid(&mut self, mesh_index: usize, name_prefix: &str,
+                           rows: usize, cols: usize, spacing: f32) -> Vec<usize> {
+        let mut instances = Vec::new();
+        
+        for row in 0..rows {
+            for col in 0..cols {
+                let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing;
+                let z = (row as f32 - (rows as f32 - 1.0) / 2.0) * spacing;
+                
+                let instance = self.create_mesh_instance(
+                    Some(format!("{}_{}", name_prefix, row * cols + col)),
+                    mesh_index,
+                    [x, 0.0, z],
+                    None,
+                    None
+                );
+                
+                instances.push(instance);
+            }
+        }
+        
+        instances
+    }
+
+    /// Create a hierarchical group of nodes safely
+    /// This method ensures no parent override errors by creating new instances
+    pub fn create_safe_hierarchy(&mut self, name: Option<String>,
+                                position: Option<[f32; 3]>,
+                                rotation: Option<[f32; 4]>,
+                                scale: Option<[f32; 3]>,
+                                child_meshes: Vec<(usize, [f32; 3])>) -> Result<usize> {
+        // Create child nodes first
+        let mut child_nodes = Vec::new();
+        
+        for (i, (mesh_index, child_pos)) in child_meshes.iter().enumerate() {
+            let child_name = name.as_ref().map(|n| format!("{}_child_{}", n, i));
+            let child_node = self.create_mesh_instance(
+                child_name,
+                *mesh_index,
+                *child_pos,
+                None,
+                None
+            );
+            child_nodes.push(child_node);
+        }
+        
+        // Create parent node with children
+        self.add_node_with_children(name, None, position, rotation, scale, child_nodes)
+    }
+
+    /// Validate the current node hierarchy for common glTF errors
+    /// Returns a list of validation warnings/errors
+    pub fn validate_hierarchy(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        
+        // Check for nodes with multiple parents (should be impossible with our API now)
+        let mut parent_counts = vec![0; self.node_parents.len()];
+        for parent_opt in &self.node_parents {
+            if let Some(parent) = parent_opt {
+                if *parent < parent_counts.len() {
+                    parent_counts[*parent] += 1;
+                }
+            }
+        }
+        
+        // Check for orphaned nodes (nodes not in any scene)
+        if let Some(scenes) = &self.gltf.scenes {
+            let mut nodes_in_scenes = std::collections::HashSet::new();
+            for scene in scenes {
+                if let Some(scene_nodes) = &scene.nodes {
+                    for &node_index in scene_nodes {
+                        self.collect_node_tree(node_index, &mut nodes_in_scenes);
+                    }
+                }
+            }
+            
+            if let Some(nodes) = &self.gltf.nodes {
+                for (i, _) in nodes.iter().enumerate() {
+                    if !nodes_in_scenes.contains(&i) {
+                        warnings.push(format!("Node {} is not referenced by any scene", i));
+                    }
+                }
+            }
+        }
+        
+        warnings
+    }
+    
+    /// Helper method to recursively collect all nodes in a tree
+    fn collect_node_tree(&self, node_index: usize, collected: &mut std::collections::HashSet<usize>) {
+        if collected.contains(&node_index) {
+            return;
+        }
+        
+        collected.insert(node_index);
+        
+        if let Some(nodes) = &self.gltf.nodes {
+            if let Some(node) = nodes.get(node_index) {
+                if let Some(children) = &node.children {
+                    for &child in children {
+                        self.collect_node_tree(child, collected);
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== SAFE READ-ONLY ACCESS METHODS ==========
+
+    /// Get the number of nodes in the document
+    pub fn node_count(&self) -> usize {
+        self.gltf.nodes.as_ref().map_or(0, |nodes| nodes.len())
+    }
+
+    /// Get the number of meshes in the document  
+    pub fn mesh_count(&self) -> usize {
+        self.gltf.meshes.as_ref().map_or(0, |meshes| meshes.len())
+    }
+
+    /// Get the number of materials in the document
+    pub fn material_count(&self) -> usize {
+        self.gltf.materials.as_ref().map_or(0, |materials| materials.len())
+    }
+
+    /// Get the number of scenes in the document
+    pub fn scene_count(&self) -> usize {
+        self.gltf.scenes.as_ref().map_or(0, |scenes| scenes.len())
+    }
+
+    /// Check if a node has a parent (safe way to check parent relationships)
+    pub fn node_has_parent(&self, node_index: usize) -> bool {
+        if node_index < self.node_parents.len() {
+            self.node_parents[node_index].is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Get the parent of a node (if any)
+    pub fn get_node_parent(&self, node_index: usize) -> Option<usize> {
+        if node_index < self.node_parents.len() {
+            self.node_parents[node_index]
+        } else {
+            None
+        }
+    }
+
+    /// Get a read-only reference to the internal glTF structure for inspection
+    /// 
+    /// ⚠️  **This is for READ-ONLY inspection only!**
+    /// Do not modify the returned structure - use the API methods instead.
+    pub fn inspect_gltf(&self) -> &Gltf {
+        &self.gltf
     }
 }

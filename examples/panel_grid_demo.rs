@@ -18,13 +18,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         [0.4, 0.3, 0.2, 1.0], // Brown dirt color
     );
 
-    let glass_material = builder.create_metallic_material(
-        Some("glass".to_string()),
-        [0.7, 0.9, 1.0, 0.8],  // Light blue with transparency
-        0.1, // Low metallic factor
-        0.0, // Very low roughness (very shiny)
-    );
-
     // LEVEL 1: Create base panel meshes (2x2m each)
     let metal_panel_mesh = builder.create_plane(
         2.0,  // width: 2 meters
@@ -40,14 +33,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         1,    // width segments: 1 (simple quad)
         1,    // depth segments: 1 (simple quad)
         Some(dirt_material)
-    );
-
-    let glass_panel_mesh = builder.create_plane(
-        2.0,  // width: 2 meters
-        2.0,  // depth: 2 meters
-        1,    // width segments: 1 (simple quad)
-        1,    // depth segments: 1 (simple quad)
-        Some(glass_material)
     );
 
     // LEVEL 2 & 3: Create sections with panel groups using true mesh instancing
@@ -93,7 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let panel_mesh = match (group_pattern + (random_value as usize % 3)) % 3 {
                             0 => metal_panel_mesh,
                             1 => dirt_panel_mesh,
-                            _ => glass_panel_mesh,
+                            _ => metal_panel_mesh,
                         };
 
                         // Position within the group (relative to group center)
