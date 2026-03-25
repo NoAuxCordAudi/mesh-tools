@@ -256,14 +256,14 @@ pub fn generate_cylinder(
             let d = ((y + 1) * vertices_per_row + x) as u32;
             
             // Two triangles per grid cell
-            indices.push(Triangle::new(a, b, d));
-            indices.push(Triangle::new(b, c, d));
+            indices.push(Triangle::new(a, d, b));
+            indices.push(Triangle::new(b, d, c));
         }
     }
     
     // If not open ended, add top and bottom caps
     if !open_ended {
-        let start_index = positions.len() / 3;
+        let start_index = positions.len();
         
         // Top cap
         // Center vertex
@@ -297,13 +297,13 @@ pub fn generate_cylinder(
         for x in 0..radial_segments {
             indices.push(Triangle::new(
                 center_index,
-                center_index + (x + 1) as u32,
-                center_index + (x + 2) as u32
+                center_index + (x + 2) as u32,
+                center_index + (x + 1) as u32
             ));
         }
         
         // Bottom cap
-        let start_index = positions.len() / 3;
+        let start_index_bottom = positions.len();
         
         // Center vertex
         positions.push(crate::compat::point3::new(0.0, -height / 2.0, 0.0));
@@ -331,13 +331,13 @@ pub fn generate_cylinder(
         }
         
         // Bottom cap indices
-        let center_index = start_index as u32;
+        let center_index = start_index_bottom as u32;
         
         for x in 0..radial_segments {
             indices.push(Triangle::new(
                 center_index,
-                center_index + (x + 2) as u32,
-                center_index + (x + 1) as u32
+                center_index + (x + 1) as u32,
+                center_index + (x + 2) as u32
             ));
         }
     }
