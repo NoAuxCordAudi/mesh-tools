@@ -7,8 +7,6 @@
 //! The builder follows a fluent API pattern where methods can be chained together to
 //! build up the document structure incrementally.
 
-use std::fs::File;
-use std::io::{self, Write, Seek};
 use byteorder::{LittleEndian, WriteBytesExt};
 use serde_json;
 
@@ -51,7 +49,7 @@ pub struct GltfBuilder {
     
     pub(crate) buffer_data: Vec<u8>,
     // Track node parent relationships to prevent override errors
-    node_parents: Vec<Option<usize>>,
+    pub(crate) node_parents: Vec<Option<usize>>,
 }
 
 impl GltfBuilder {
@@ -79,7 +77,7 @@ impl GltfBuilder {
         gltf.materials = Some(Vec::new());
         gltf.textures = Some(Vec::new());
         gltf.images = Some(Vec::new());
-        gltf.animations = Some(Vec::new());
+        // `animations` stays None until the first animation is added (an empty array is invalid glTF)
         gltf.samplers = Some(Vec::new());
         gltf.skins = Some(Vec::new());
         
@@ -350,52 +348,79 @@ impl GltfBuilder {
         (byte_offset, byte_length)
     }
 
-    /// Export the glTF as a GLB file
-    pub fn export_glb(&self, path: &str) -> Result<()> {
-        let mut file = File::create(path)?;
-        
-        // Write GLB header (magic, version, length)
-        file.write_all(b"glTF")?;
-        file.write_u32::<LittleEndian>(2)?; // version
-        
-        // We'll write the total length later, once we know it
-        let length_pos = file.stream_position()?;
-        file.write_u32::<LittleEndian>(0)?; // placeholder total length
-        
-        // JSON chunk
-        let json = serde_json::to_string(&self.gltf)?;
-        let json_len = json.len();
-        let json_pad = (4 - (json_len % 4)) % 4; // Padding to 4-byte boundary
-        
-        file.write_u32::<LittleEndian>((json_len + json_pad) as u32)?; // chunk length
-        file.write_u32::<LittleEndian>(0x4E4F534A)?; // chunk type "JSON"
-        file.write_all(json.as_bytes())?;
-        
-        // Add padding
-        for _ in 0..json_pad {
-            file.write_u8(0x20)?; // Space character for padding
+    /// Validate the document, then serialize it to GLB bytes.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` listing every validation error (see
+    /// [`validate`](Self::validate)), or if the GLB would exceed the 4 GiB container limit.
+    /// Use [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked) to skip validation.
+    pub fn to_glb_bytes(&self) -> Result<Vec<u8>> {
+        let report = self.validate();
+        if !report.errors.is_empty() {
+            return Err(GltfError::InvalidData(format!(
+                "document failed validation with {} error(s):\n  - {}",
+                report.errors.len(),
+                report.errors.join("\n  - ")
+            )));
         }
-        
-        // BIN chunk
+        self.to_glb_bytes_unchecked()
+    }
+
+    /// Serialize to GLB bytes **without** validating the document.
+    ///
+    /// Empty top-level arrays (which glTF forbids) are omitted. The result may be an invalid
+    /// glTF file; this exists for deliberately producing or inspecting such documents.
+    pub fn to_glb_bytes_unchecked(&self) -> Result<Vec<u8>> {
+        let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
+
+        let mut value = serde_json::to_value(&self.gltf)?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.retain(|_, v| !matches!(v, serde_json::Value::Array(a) if a.is_empty()));
+        }
+        let json = serde_json::to_string(&value)?;
+        let json_pad = (4 - (json.len() % 4)) % 4;
+        let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
+
+        let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + self.buffer_data.len() + 3);
+        out.extend_from_slice(b"glTF");
+        out.write_u32::<LittleEndian>(2)?; // version
+        out.write_u32::<LittleEndian>(0)?; // total length, patched below
+
+        out.write_u32::<LittleEndian>(json_chunk_len)?;
+        out.write_u32::<LittleEndian>(0x4E4F534A)?; // "JSON"
+        out.extend_from_slice(json.as_bytes());
+        out.resize(out.len() + json_pad, 0x20); // pad with spaces
+
         if !self.buffer_data.is_empty() {
-            let bin_len = self.buffer_data.len();
-            let bin_pad = (4 - (bin_len % 4)) % 4; // Padding to 4-byte boundary
-            
-            file.write_u32::<LittleEndian>((bin_len + bin_pad) as u32)?; // chunk length
-            file.write_u32::<LittleEndian>(0x004E4942)?; // chunk type "BIN"
-            file.write_all(&self.buffer_data)?;
-            
-            // Add padding
-            for _ in 0..bin_pad {
-                file.write_u8(0)?;
-            }
+            let bin_pad = (4 - (self.buffer_data.len() % 4)) % 4;
+            let bin_chunk_len = u32::try_from(self.buffer_data.len() + bin_pad).map_err(|_| too_large())?;
+            out.write_u32::<LittleEndian>(bin_chunk_len)?;
+            out.write_u32::<LittleEndian>(0x004E4942)?; // "BIN\0"
+            out.extend_from_slice(&self.buffer_data);
+            out.resize(out.len() + bin_pad, 0);
         }
-        
-        // Go back and write the total length
-        let current_pos = file.stream_position()?;
-        file.seek(io::SeekFrom::Start(length_pos))?;
-        file.write_u32::<LittleEndian>(current_pos as u32)?;
-        
+
+        let total = u32::try_from(out.len()).map_err(|_| too_large())?;
+        out[8..12].copy_from_slice(&total.to_le_bytes());
+        Ok(out)
+    }
+
+    /// Validate the document and export it as a GLB file.
+    ///
+    /// Nothing is written if validation fails. See [`to_glb_bytes`](Self::to_glb_bytes).
+    pub fn export_glb(&self, path: &str) -> Result<()> {
+        // Serialize fully first so a failure never leaves a truncated file behind.
+        let bytes = self.to_glb_bytes()?;
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    /// Export as a GLB file **without** validating. See
+    /// [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked).
+    pub fn export_glb_unchecked(&self, path: &str) -> Result<()> {
+        let bytes = self.to_glb_bytes_unchecked()?;
+        std::fs::write(path, bytes)?;
         Ok(())
     }
 

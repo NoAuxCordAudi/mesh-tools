@@ -1,112 +1,173 @@
-# Skeletal Animation (Skinning) Support
+# Skinning and Skeletal Animation
 
-This document describes how to use the skeletal animation (skinning) features in the mesh-tools library.
+How to build skinned meshes and animate them with mesh-tools. Every code block in this file
+is compiled and run by `cargo test --doc`, so it cannot silently go stale.
 
-## Overview
+## Concepts
 
-The mesh-tools library now supports glTF skinning for skeletal animation. This includes:
+- **Joints** are ordinary nodes. A **skin** lists them in an order; a joint's position in that
+  list is its **slot**.
+- **`JOINTS_n` holds slots, not node indices.** If your joints are nodes 5, 6, 7, the mesh
+  refers to them as 0, 1, 2.
+- **Inverse bind matrices** (IBMs) map mesh space into each joint's space in the bind pose. They
+  are stored column-major, 16 floats per joint, with the translation in elements 12..15.
+- **Weights** say how much each of up to four joints (per set) moves a vertex. Across all sets, a
+  vertex's weights sum to 1.
+- A skinned node's own transform is ignored by glTF viewers. The joints drive the deformation,
+  so give the skinned node no transform.
 
-- **Skins**: Collections of joints that define how a mesh deforms
-- **Joints**: Individual bones in a skeleton hierarchy  
-- **Inverse Bind Matrices**: Transform vertices from model space to joint space
-- **Joint Weights**: Control how much each bone affects each vertex
-
-## Key Components
-
-### Data Models
-
-- `Skin`: Represents a glTF skin with joints, inverse bind matrices, and skeleton root
-- `Node.skin`: Optional reference to a skin for skinned mesh nodes
-
-### Builder Methods
-
-The `GltfBuilder` provides several methods for creating skinned content:
-
-#### Core Skin Methods
-- `add_skin()`: Create a skin with joints and inverse bind matrices
-- `add_joint_node()`: Create individual joint/bone nodes
-- `create_inverse_bind_matrices_accessor()`: Create accessors for inverse bind matrix data
-- `add_skinned_node()`: Create nodes that reference both meshes and skins
-
-#### Utility Methods
-- `create_bone_chain()`: Create a linear chain of connected joints
-- `create_skinned_mesh()`: Create meshes with `JOINTS_0` and `WEIGHTS_0` attributes
-
-## Basic Usage
+## Building a skinned mesh
 
 ```rust
-use mesh_tools::GltfBuilder;
+use mesh_tools::{GltfBuilder, InterpolationType};
 
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let mut builder = GltfBuilder::new();
 
-// 1. Create a bone hierarchy
-let joint_names = vec!["Shoulder".to_string(), "Elbow".to_string(), "Wrist".to_string()];
-let joint_positions = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
-let joint_indices = builder.create_bone_chain(&joint_names, &joint_positions)?;
+// 1. A joint chain. Offsets are relative to the parent joint.
+let names = vec!["Shoulder".to_string(), "Elbow".to_string()];
+let joints = builder.create_bone_chain(&names, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])?;
 
-// 2. Create a skinned mesh with joint weights
-let (positions, indices, normals, joints, weights) = create_mesh_with_weights();
-let mesh_index = builder.create_skinned_mesh(
-    Some("SkinnedMesh".to_string()),
+// 2. The skin. Inverse bind matrices are computed from the joints' current transforms,
+//    so build the hierarchy first.
+let skin = builder.add_skin_from_joints(Some("ArmSkin".into()), joints.clone(), Some(joints[0]))?;
+
+// 3. A skinned mesh: one triangle. Slots 0/1 refer to Shoulder/Elbow, not to node indices.
+let positions = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0];
+let mesh = builder.create_skinned_mesh(
+    None,
     &positions,
-    &indices,
-    Some(&normals),
-    None, // texture coordinates
-    &joints,
-    &weights,
-    Some(material_index),
+    &[0, 1, 2],
+    None, // normals
+    None, // texcoords
+    &[[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0]],
+    &[[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.5, 0.5, 0.0, 0.0]],
+    None, // material
 )?;
 
-// 3. Create inverse bind matrices
-let inverse_bind_matrices = create_inverse_bind_matrices(&joint_positions);
-let ibm_accessor = builder.create_inverse_bind_matrices_accessor(&inverse_bind_matrices);
+// 4. A node that renders the mesh with the skin, and a scene containing it and the skeleton.
+let node = builder.add_skinned_node(None, mesh, skin, None, None, None)?;
+builder.add_scene(None, Some(vec![node, joints[0]]));
 
-// 4. Create the skin
-let skin_index = builder.add_skin(
-    Some("MySkin".to_string()),
-    joint_indices.clone(),
-    Some(ibm_accessor),
-    Some(joint_indices[0]), // skeleton root
-);
+// 5. Bend the elbow 45 degrees about Z over one second.
+let animation = builder.add_animation(Some("Bend".into()));
+builder.add_rotation_track(
+    animation,
+    joints[1],
+    &[0.0, 1.0],
+    &[[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.38268343, 0.9238795]],
+    InterpolationType::Linear,
+)?;
 
-// 5. Create a node that uses the skinned mesh
-let skinned_node = builder.add_skinned_node(
-    Some("SkinnedObject".to_string()),
-    mesh_index,
-    skin_index,
-    Some([0.0, 0.0, 0.0]), // position
-    None, // rotation
-    None, // scale
-);
+// Export validates first: a dangling index or out-of-range joint is an error, not a bad file.
+let bytes = builder.to_glb_bytes()?;
+assert!(bytes.starts_with(b"glTF"));
+# Ok(())
+# }
 ```
 
-## Joint Weights Format
+A complete, runnable version with a cylinder mesh and two animations is in
+`examples/skeletal_animation_demo.rs`:
 
-Joint weights follow the glTF 2.0 specification:
-- **JOINTS_0**: Array of `[u16; 4]` - indices of joints affecting each vertex
-- **WEIGHTS_0**: Array of `[f32; 4]` - weights for each joint (should sum to 1.0)
-
-Each vertex can be influenced by up to 4 joints. Unused joint slots should use index 0 and weight 0.0.
-
-## Example
-
-See `examples/skeletal_animation_demo.rs` for a complete working example that creates:
-- A 3-joint arm skeleton (shoulder, elbow, wrist)
-- A cylindrical mesh with proper joint weights
-- Inverse bind matrices for proper binding
-- Complete skinned character export
-
-Run with:
 ```bash
-cargo run --example skeletal_animation_demo
+cargo run --example skeletal_animation_demo [output.glb]
 ```
 
-## glTF Specification Compliance
+## Weights
 
-This implementation follows the [glTF 2.0 specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#skins) for skinning:
+The mesh functions **reject** bad weights rather than silently changing your data. Each
+vertex's weights, summed over all sets, must be finite, non-negative and add up to 1 within
+`1e-5`. A joint with a non-zero weight may not appear twice on one vertex, and its slot must be below
+the skin's joint count. That count is checked by `create_skinned_primitive` and by `MeshBuilder`
+with `with_joint_count`; `create_skinned_mesh` only checks that slots fit in `u16`. In every
+case, export reports any slot beyond the skin's joints as `SKIN_JOINT_OUT_OF_RANGE`. Unused
+slots use any joint value with weight `0.0`.
 
-- Skins contain arrays of joint node indices
-- Inverse bind matrices are stored as 4x4 matrices in column-major order
-- Joint indices use `UNSIGNED_SHORT` component type
-- Joint weights use `FLOAT` component type
-- Meshes reference skins through the `skin` property on nodes
+Two explicit helpers fix data up when you want that:
+
+```rust
+use mesh_tools::{limit_influences, normalize_weights};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+// Reduce an arbitrary number of (slot, weight) influences per vertex to the strongest four,
+// renormalized. This is lossy by design.
+let (joints, mut weights) = limit_influences(&[
+    vec![(3, 0.4), (1, 0.2), (9, 0.2), (7, 0.1), (5, 0.1)],
+])?;
+assert_eq!(joints[0], [3, 1, 9, 5]);
+
+// Rescale each vertex's four weights to sum to exactly 1.
+normalize_weights(&mut weights)?;
+# Ok(())
+# }
+```
+
+For more than four influences, or `u8` joints, use `create_skinned_primitive` with one or more
+`SkinSet`s (`JOINTS_0`/`WEIGHTS_0`, `JOINTS_1`/`WEIGHTS_1`, ...). It also validates everything
+before writing anything, so a failed call leaves the document unchanged. `MeshBuilder` can
+build the same data with `with_joints`, `with_weights`, `with_joint_count` and `build_into`.
+
+## Animation
+
+Tracks animate a node's translation, rotation or scale:
+
+| Function | Keyframe values |
+|---|---|
+| `add_translation_track`, `add_scale_track` | `&[[f32; 3]]` |
+| `add_rotation_track` | `&[[f32; 4]]` quaternions (normalized for you) |
+| `add_cubic_translation_track`, `add_cubic_scale_track`, `add_cubic_rotation_track` | `&[CubicKeyframe<..>]` |
+
+Rules the library enforces (each is an error, never a panic, and a failed call writes nothing):
+
+- Times are non-empty, finite, `>= 0` and strictly increasing.
+- Within one animation each `(node, path)` pair has at most one channel.
+- A node with a `matrix` cannot be animated.
+- `CUBICSPLINE` needs `CubicKeyframe { in_tangent, value, out_tangent }` and at least two
+  keyframes. Passing plain values with `InterpolationType::CubicSpline` is an error, because
+  tangents are never invented for you.
+- Animating `weights` (morph targets) is not supported yet and returns an error.
+
+```rust
+use mesh_tools::{CubicKeyframe, GltfBuilder};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut builder = GltfBuilder::new();
+let node = builder.add_node(None, None, None, None, None);
+let animation = builder.add_animation(None);
+
+let key = |x: f32| CubicKeyframe {
+    in_tangent: [0.0; 3],
+    value: [x, 0.0, 0.0],
+    out_tangent: [0.0; 3],
+};
+builder.add_cubic_translation_track(animation, node, &[0.0, 1.0], &[key(0.0), key(1.0)])?;
+# Ok(())
+# }
+```
+
+## Validation
+
+`GltfBuilder::validate()` returns a `ValidationReport { errors, warnings }`. `export_glb` and
+`to_glb_bytes` call it and fail with `GltfError::InvalidData` listing every error; the
+`*_unchecked` variants skip it. Every message starts with a stable code. The skinning-related
+ones include:
+
+- `NODE_SKIN_WITHOUT_MESH`, `NODE_SKIN_INVALID`
+- `SKIN_MESH_MISSING_ATTRIBUTES` (skinned node's mesh lacks `JOINTS_0`/`WEIGHTS_0`)
+- `SKIN_JOINT_OUT_OF_RANGE` (read back from the buffer: catches node indices used as slots)
+- `SKIN_NO_JOINTS`, `SKIN_JOINT_INVALID`, `SKIN_JOINT_DUPLICATE`
+- `SKIN_NO_COMMON_ROOT`, `SKIN_SKELETON_NOT_ANCESTOR`, `SKIN_SKELETON_INVALID`
+- `SKIN_IBM_INVALID`, `SKIN_IBM_TYPE`, `SKIN_IBM_COUNT`
+- `ANIMATION_EMPTY`, `ANIMATION_CHANNEL_NODE_MATRIX`, `ANIMATION_INPUT_NO_BOUNDS`
+
+A skinned node with a non-identity transform is reported as the warning
+`SKINNED_NODE_LOCAL_TRANSFORM`; warnings never block export.
+
+## Limits
+
+- Inverse bind matrices assume each joint's world transform is affine (bottom row `0 0 0 1`),
+  built from a node's `matrix` or its translation, rotation and scale. A non-affine `matrix`
+  gives a meaningless result. Singular transforms (for example a zero scale) are an error.
+- Normalized `u8`/`u16` weights and morph targets are not supported yet.
+- The validator checks structure and ranges. It is not a replacement for the Khronos glTF
+  Validator, which has not been run against this library's output.

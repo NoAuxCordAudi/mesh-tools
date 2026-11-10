@@ -54,7 +54,7 @@ impl GltfBuilder {
     /// );
     /// 
     /// // Use the material with a mesh
-    /// let cube = builder.create_box(1.0, Some(blue_metal));
+    /// let cube = builder.create_box_with_material(1.0, Some(blue_metal));
     /// ```
     pub fn add_material(&mut self, name: Option<String>, 
                         base_color: Option<[f32; 4]>,

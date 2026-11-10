@@ -19,17 +19,22 @@
 //! ## Example
 //!
 //! ```rust
-//! use mesh_tools::mesh::MeshBuilder;
+//! use mesh_tools::{GltfBuilder, mesh::MeshBuilder};
 //!
-//! // Create a mesh with custom data
-//! let mesh = MeshBuilder::new(Some("CustomMesh".to_string()))
+//! let mut builder = GltfBuilder::new();
+//! // Uploads all attributes into the builder and returns the mesh index
+//! let mesh_index = MeshBuilder::new(Some("CustomMesh".to_string()))
 //!     .with_positions(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
 //!     .with_indices(vec![0, 1, 2])
 //!     .with_normals(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
-//!     .build();
+//!     .build_into(&mut builder)
+//!     .unwrap();
 //! ```
 
-use crate::models::{Primitive, Mesh};
+use crate::builder::GltfBuilder;
+use crate::error::{GltfError, Result};
+use crate::builder_skin::{JointIndices, SkinSet};
+use crate::models::Primitive;
 use std::collections::HashMap;
 
 /// Builder for creating and configuring 3D mesh objects
@@ -41,6 +46,7 @@ pub struct MeshBuilder {
     texcoords: Option<Vec<Vec<f32>>>,
     joints: Option<Vec<[u16; 4]>>,
     weights: Option<Vec<[f32; 4]>>,
+    joint_count: Option<usize>,
     material: Option<usize>,
     name: Option<String>,
 }
@@ -56,6 +62,7 @@ impl MeshBuilder {
             texcoords: None,
             joints: None,
             weights: None,
+            joint_count: None,
             material: None,
             name,
         }
@@ -120,32 +127,77 @@ impl MeshBuilder {
         self
     }
     
-    /// Build the mesh
-    pub fn build(self) -> Mesh {
-        let mut mesh = Mesh::default();
-        mesh.name = self.name;
-        
+    /// Set the number of joints in the skin this mesh will be used with.
+    ///
+    /// When set, every joint slot with a non-zero weight is checked against it. When not
+    /// set, only the `u16` range is enforced (the skin isn't known yet).
+    pub fn with_joint_count(mut self, joint_count: usize) -> Self {
+        self.joint_count = Some(joint_count);
+        self
+    }
+
+    /// Upload the mesh into `gltf` and return its mesh index.
+    ///
+    /// All attributes are uploaded: positions (with bounds), optional normals, any number
+    /// of texcoord sets (`TEXCOORD_n`), indices (`u16` here; empty means non-indexed
+    /// geometry), and, if set, `JOINTS_0`/`WEIGHTS_0`.
+    ///
+    /// If a custom primitive builder was set with
+    /// [`with_primitive_builder`](Self::with_primitive_builder), it is called to produce the
+    /// primitive instead, and joints/weights/joint count cannot be combined with it.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if joints are set without weights or the reverse, if a
+    /// custom primitive builder is combined with skinning data, or for any validation
+    /// failure documented on
+    /// [`GltfBuilder::create_skinned_primitive`](crate::GltfBuilder::create_skinned_primitive)
+    /// (counts, index range, weights). The document is unchanged on error.
+    pub fn build_into(self, gltf: &mut GltfBuilder) -> Result<usize> {
+        let has_skin_data = self.joints.is_some() || self.weights.is_some() || self.joint_count.is_some();
+
         if let Some(mut builder_fn) = self.builder {
+            if has_skin_data {
+                return Err(GltfError::InvalidInput(
+                    "a custom primitive builder cannot be combined with joints, weights or joint count".to_string(),
+                ));
+            }
             let primitive = builder_fn(
                 &self.positions,
-                &self.indices, 
+                &self.indices,
                 self.normals.as_deref(),
-                self.texcoords.clone(),
-                self.material
+                self.texcoords,
+                self.material,
             );
-            mesh.primitives = vec![primitive];
-        } else {
-            // Use default primitive building if no custom builder provided
-            let primitive = crate::models::Primitive {
-                attributes: std::collections::HashMap::new(),
-                indices: None,
-                material: self.material,
-                mode: None,
-            };
-            mesh.primitives = vec![primitive];
+            return Ok(gltf.add_mesh(self.name, vec![primitive]));
         }
-        
-        mesh
+
+        let skin_sets = match (self.joints, self.weights) {
+            (Some(joints), Some(weights)) => vec![SkinSet { joints: JointIndices::U16(joints), weights }],
+            (None, None) => Vec::new(),
+            (Some(_), None) => {
+                return Err(GltfError::InvalidInput("joints were set but weights were not".to_string()));
+            }
+            (None, Some(_)) => {
+                return Err(GltfError::InvalidInput("weights were set but joints were not".to_string()));
+            }
+        };
+        if skin_sets.is_empty() && self.joint_count.is_some() {
+            return Err(GltfError::InvalidInput("joint count was set but there are no joints/weights".to_string()));
+        }
+
+        let indices: Vec<u32> = self.indices.iter().map(|&i| u32::from(i)).collect();
+        let texcoord_sets: Vec<&[f32]> = self.texcoords.iter().flatten().map(|t| t.as_slice()).collect();
+        let primitive = gltf.create_primitive_checked(
+            &self.positions,
+            if indices.is_empty() { None } else { Some(&indices) },
+            self.normals.as_deref(),
+            &texcoord_sets,
+            &skin_sets,
+            self.joint_count.unwrap_or(u16::MAX as usize + 1),
+            self.material,
+        )?;
+        Ok(gltf.add_mesh(self.name, vec![primitive]))
     }
 }
 

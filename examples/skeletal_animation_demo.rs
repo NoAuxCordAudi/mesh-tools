@@ -1,203 +1,178 @@
 //! # Skeletal Animation Demo
 //!
-//! This example demonstrates how to create skeletal animation in glTF using the mesh-tools library.
-//! It creates a simple animated character with:
-//! - A hierarchical skeleton (bone chain)
-//! - A skinned mesh that deforms with the skeleton
-//! - Inverse bind matrices for proper joint-to-mesh binding
-//! - Joint weights that control how much each bone affects each vertex
+//! A three-joint arm (shoulder, elbow, wrist) whose skinned mesh bends as the joints animate.
+//!
+//! What it shows:
+//! - a joint hierarchy built with `create_bone_chain`
+//! - a skinned mesh whose `JOINTS_0` values are skin *slots* (positions in the skin's joint
+//!   list), not node indices, with weights that sum to 1 on every vertex
+//! - a skin whose inverse bind matrices are computed by the library from the bind pose
+//!   (`add_skin_from_joints`)
+//! - a skinned node with no transform of its own (viewers ignore it anyway)
+//! - a `LINEAR` elbow animation and a `CUBICSPLINE` wrist animation
+//!
+//! The arm lies along +X: shoulder at x=0, elbow at x=2, wrist at x=4, hand tip at x=6.
+//! The joints rotate about Z, so the arm bends in the XY plane.
+//!
+//! Usage: `cargo run --example skeletal_animation_demo [output.glb]`
 
-use mesh_tools::GltfBuilder;
+use mesh_tools::{normalize_weights, CubicKeyframe, GltfBuilder, InterpolationType};
 use std::f32::consts::PI;
 
+/// Output path used when no argument is given.
+const DEFAULT_OUTPUT: &str = "skeletal_animation_demo.glb";
+
+/// Positions along the arm (x) where vertex rings are placed. Extra rings around the
+/// elbow (x=2) and wrist (x=4) give the bend something to deform.
+const RING_X: [f32; 11] = [0.0, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0];
+const SEGMENTS: usize = 8;
+const RADIUS: f32 = 0.3;
+
+/// Skin slots: positions in the skin's `joints` list. They are *not* node indices (the
+/// joints are nodes 1, 2, 3 because the ground slab is node 0).
+const SHOULDER: u16 = 0;
+const ELBOW: u16 = 1;
+const WRIST: u16 = 2;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_OUTPUT.to_string());
     let mut builder = GltfBuilder::new();
 
-    // Create a simple material for our mesh
-    let material_index = builder.create_basic_material(
-        Some("SkinnedMaterial".to_string()),
-        [0.8, 0.6, 0.4, 1.0], // Base color - skin tone
+    let material = builder.create_basic_material(Some("ArmMaterial".to_string()), [0.8, 0.6, 0.4, 1.0]);
+
+    // A thin ground slab for visual reference. It is created first on purpose: the joint
+    // nodes below become nodes 1, 2, 3, so node indices differ from skin slots 0, 1, 2.
+    let ground_mesh = builder.create_box(1.0);
+    let ground = builder.add_node(
+        Some("Ground".to_string()),
+        Some(ground_mesh),
+        Some([3.0, -1.0, 0.0]),
+        None,
+        Some([8.0, 0.05, 3.0]),
     );
 
-    // Create a bone hierarchy - a simple arm with shoulder, elbow, and wrist
-    let joint_names = vec![
-        "Shoulder".to_string(),
-        "Elbow".to_string(),
-        "Wrist".to_string(),
-    ];
+    // Joint hierarchy. Positions are relative to the parent joint.
+    let joint_names = vec!["Shoulder".to_string(), "Elbow".to_string(), "Wrist".to_string()];
+    let joint_offsets = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    let joints = builder.create_bone_chain(&joint_names, &joint_offsets)?;
 
-    let joint_positions = vec![
-        [0.0, 0.0, 0.0],    // Shoulder at origin
-        [2.0, 0.0, 0.0],    // Elbow 2 units along X
-        [2.0, 0.0, 0.0],    // Wrist 2 more units along X
-    ];
+    // Skin: inverse bind matrices come from the joints' current (bind) transforms.
+    let skin = builder.add_skin_from_joints(Some("ArmSkin".to_string()), joints.clone(), Some(joints[0]))?;
 
-    // Create the bone chain
-    let joint_indices = builder.create_bone_chain(&joint_names, &joint_positions)?;
-    println!("Created joint chain with indices: {:?}", joint_indices);
-
-    // Create a simple cylindrical mesh representing an arm
-    // The mesh will be deformed by the joints
-    let (positions, indices, normals, joints, weights) = create_arm_mesh(&joint_indices);
-
-    // Create the skinned mesh
-    let mesh_index = builder.create_skinned_mesh(
+    // Skinned mesh. Joint indices in the mesh are slots into `joints` above.
+    let arm = build_arm_mesh()?;
+    let mesh = builder.create_skinned_mesh(
         Some("ArmMesh".to_string()),
-        &positions,
-        &indices,
-        Some(&normals),
-        None, // No texture coordinates for this demo
-        &joints,
-        &weights,
-        Some(material_index),
+        &arm.positions,
+        &arm.indices,
+        Some(&arm.normals),
+        None,
+        &arm.joints,
+        &arm.weights,
+        Some(material),
     )?;
 
-    // Create inverse bind matrices for the joints
-    // These matrices transform vertices from model space to joint space
-    let inverse_bind_matrices = create_inverse_bind_matrices(&joint_positions);
-    let inverse_bind_matrices_accessor = builder.create_inverse_bind_matrices_accessor(&inverse_bind_matrices);
+    // The skinned node has no transform: the joints drive the deformation.
+    let skinned_node = builder.add_skinned_node(Some("SkinnedArm".to_string()), mesh, skin, None, None, None)?;
 
-    // Create the skin
-    let skin_index = builder.add_skin(
-        Some("ArmSkin".to_string()),
-        joint_indices.clone(),
-        Some(inverse_bind_matrices_accessor),
-        Some(joint_indices[0]), // Shoulder is the skeleton root
-    );
+    // The first scene becomes the default scene. Include the skeleton root so the joints are in it.
+    builder.add_scene(Some("ArmScene".to_string()), Some(vec![ground, skinned_node, joints[0]]));
 
-    // Create a node that uses the skinned mesh
-    let skinned_node_index = builder.add_skinned_node(
-        Some("SkinnedArm".to_string()),
-        mesh_index,
-        skin_index,
-        Some([0.0, 0.0, 0.0]), // Position
-        None,                   // No rotation
-        None,                   // No scale
-    );
+    // Elbow bend: LINEAR, 0 -> 70 degrees -> 0 over two seconds.
+    let bend = builder.add_animation(Some("ElbowBend".to_string()));
+    builder.add_rotation_track(
+        bend,
+        joints[1],
+        &[0.0, 1.0, 2.0],
+        &[z_rotation(0.0), z_rotation(70.0), z_rotation(0.0)],
+        InterpolationType::Linear,
+    )?;
 
-    // Create a scene containing our skinned object
-    let scene_index = builder.add_scene(
-        Some("SkeletalAnimationScene".to_string()),
-        Some(vec![skinned_node_index, joint_indices[0]]), // Include both the skinned mesh and the skeleton root
-    );
+    // Wrist wave: CUBICSPLINE with explicit tangents (zero tangents ease in and out).
+    let wave = builder.add_animation(Some("WristWave".to_string()));
+    let key = |degrees: f32| CubicKeyframe {
+        in_tangent: [0.0; 4],
+        value: z_rotation(degrees),
+        out_tangent: [0.0; 4],
+    };
+    builder.add_cubic_rotation_track(wave, joints[2], &[0.0, 1.0, 2.0], &[key(0.0), key(-45.0), key(0.0)])?;
 
-    // Set the default scene
-    builder.gltf.scene = Some(scene_index);
-
-    // Export the GLB file
-    builder.export_glb("skeletal_animation_demo.glb")?;
-    println!("Exported skeletal_animation_demo.glb");
-
+    // Export validates the document first and fails with a list of problems if it is invalid.
+    builder.export_glb(&output)?;
+    println!("Exported {output}");
+    println!("  joints (node indices): {joints:?}");
+    println!("  animations: ElbowBend (LINEAR), WristWave (CUBICSPLINE)");
     Ok(())
 }
 
-/// Creates a simple arm mesh with joint weights
-/// Returns (positions, indices, normals, joints, weights)
-fn create_arm_mesh(joint_indices: &[usize]) -> (Vec<f32>, Vec<u16>, Vec<f32>, Vec<[u16; 4]>, Vec<[f32; 4]>) {
-    let mut positions = Vec::new();
-    let mut indices = Vec::new();
-    let mut normals = Vec::new();
-    let mut joints = Vec::new();
-    let mut weights = Vec::new();
-
-    // Create a simple cylindrical arm mesh with 3 segments
-    let segments = 8; // Number of segments around the cylinder
-    let length_segments = 3; // Number of segments along the length
-    let radius = 0.3;
-    let total_length = 4.0; // Total arm length
-
-    // Generate vertices
-    for i in 0..=length_segments {
-        let z = (i as f32 / length_segments as f32) * total_length;
-        
-        for j in 0..segments {
-            let angle = (j as f32 / segments as f32) * 2.0 * PI;
-            let x = angle.cos() * radius;
-            let y = angle.sin() * radius;
-
-            positions.extend_from_slice(&[x, y, z]);
-            normals.extend_from_slice(&[angle.cos(), angle.sin(), 0.0]);
-
-            // Assign joint weights based on position along the arm
-            let joint_weight = if i == 0 {
-                // First segment - fully influenced by shoulder
-                [joint_indices[0] as u16, 0, 0, 0]
-            } else if i == 1 {
-                // Second segment - blend between shoulder and elbow
-                [joint_indices[0] as u16, joint_indices[1] as u16, 0, 0]
-            } else if i == 2 {
-                // Third segment - blend between elbow and wrist
-                [joint_indices[1] as u16, joint_indices[2] as u16, 0, 0]
-            } else {
-                // Last segment - fully influenced by wrist
-                [joint_indices[2] as u16, 0, 0, 0]
-            };
-
-            let weight_values = if i == 0 {
-                [1.0, 0.0, 0.0, 0.0] // Fully shoulder
-            } else if i == 1 {
-                [0.7, 0.3, 0.0, 0.0] // Mostly shoulder, some elbow
-            } else if i == 2 {
-                [0.0, 0.7, 0.3, 0.0] // Mostly elbow, some wrist
-            } else {
-                [0.0, 0.0, 1.0, 0.0] // Fully wrist
-            };
-
-            joints.push(joint_weight);
-            weights.push(weight_values);
-        }
-    }
-
-    // Generate indices for triangles
-    for i in 0..length_segments {
-        for j in 0..segments {
-            let current = i * segments + j;
-            let next = i * segments + ((j + 1) % segments);
-            let current_next_row = (i + 1) * segments + j;
-            let next_next_row = (i + 1) * segments + ((j + 1) % segments);
-
-            // First triangle
-            indices.extend_from_slice(&[
-                current as u16,
-                next as u16,
-                current_next_row as u16,
-            ]);
-
-            // Second triangle
-            indices.extend_from_slice(&[
-                next as u16,
-                next_next_row as u16,
-                current_next_row as u16,
-            ]);
-        }
-    }
-
-    (positions, indices, normals, joints, weights)
+/// Quaternion `[x, y, z, w]` for a rotation of `degrees` about Z.
+fn z_rotation(degrees: f32) -> [f32; 4] {
+    let half = degrees.to_radians() * 0.5;
+    [0.0, 0.0, half.sin(), half.cos()]
 }
 
-/// Creates inverse bind matrices for the joints
-fn create_inverse_bind_matrices(joint_positions: &[[f32; 3]]) -> Vec<mint::ColumnMatrix4<f32>> {
-    let mut matrices = Vec::new();
-    let mut cumulative_translation = [0.0, 0.0, 0.0];
+struct ArmMesh {
+    positions: Vec<f32>,
+    indices: Vec<u16>,
+    normals: Vec<f32>,
+    joints: Vec<[u16; 4]>,
+    weights: Vec<[f32; 4]>,
+}
 
-    for position in joint_positions {
-        // Update cumulative translation
-        cumulative_translation[0] += position[0];
-        cumulative_translation[1] += position[1];
-        cumulative_translation[2] += position[2];
-
-        // Create inverse bind matrix (inverse of the joint's world transform)
-        // This is a simple translation matrix inverted
-        #[rustfmt::skip]
-        let inverse_bind_matrix = mint::ColumnMatrix4 {
-            x: mint::Vector4 { x: 1.0, y: 0.0, z: 0.0, w: -cumulative_translation[0] },
-            y: mint::Vector4 { x: 0.0, y: 1.0, z: 0.0, w: -cumulative_translation[1] },
-            z: mint::Vector4 { x: 0.0, y: 0.0, z: 1.0, w: -cumulative_translation[2] },
-            w: mint::Vector4 { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
-        };
-
-        matrices.push(inverse_bind_matrix);
+/// Skin slots and weights for a ring at position `x` along the arm.
+///
+/// Rigid near the shoulder, blends shoulder -> elbow over 1.5..2.5, rigid on the
+/// forearm, blends elbow -> wrist over 3.5..4.5, rigid on the hand.
+fn influences(x: f32) -> ([u16; 4], [f32; 4]) {
+    if x <= 1.5 {
+        ([SHOULDER, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+    } else if x < 2.5 {
+        let t = x - 1.5;
+        ([SHOULDER, ELBOW, 0, 0], [1.0 - t, t, 0.0, 0.0])
+    } else if x <= 3.5 {
+        ([ELBOW, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+    } else if x < 4.5 {
+        let t = x - 3.5;
+        ([ELBOW, WRIST, 0, 0], [1.0 - t, t, 0.0, 0.0])
+    } else {
+        ([WRIST, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
     }
+}
 
-    matrices
+/// A cylinder along +X with outward-facing (counter-clockwise) triangles.
+fn build_arm_mesh() -> Result<ArmMesh, Box<dyn std::error::Error>> {
+    let mut mesh = ArmMesh {
+        positions: Vec::new(),
+        indices: Vec::new(),
+        normals: Vec::new(),
+        joints: Vec::new(),
+        weights: Vec::new(),
+    };
+
+    for &x in &RING_X {
+        let (slots, weights) = influences(x);
+        for j in 0..SEGMENTS {
+            let angle = j as f32 / SEGMENTS as f32 * 2.0 * PI;
+            let (sin, cos) = angle.sin_cos();
+            mesh.positions.extend_from_slice(&[x, cos * RADIUS, sin * RADIUS]);
+            mesh.normals.extend_from_slice(&[0.0, cos, sin]);
+            mesh.joints.push(slots);
+            mesh.weights.push(weights);
+        }
+    }
+    // Make every vertex's weights sum to exactly 1 (the library rejects sums that are off).
+    normalize_weights(&mut mesh.weights)?;
+
+    for ring in 0..RING_X.len() - 1 {
+        for j in 0..SEGMENTS {
+            let next = (j + 1) % SEGMENTS;
+            let a = (ring * SEGMENTS + j) as u16;
+            let b = (ring * SEGMENTS + next) as u16;
+            let c = ((ring + 1) * SEGMENTS + j) as u16;
+            let d = ((ring + 1) * SEGMENTS + next) as u16;
+            // Viewed from outside, the angle increases counter-clockwise around +X.
+            mesh.indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+    Ok(mesh)
 }

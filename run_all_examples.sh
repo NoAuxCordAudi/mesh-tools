@@ -9,23 +9,26 @@ echo
 
 # List of all examples in the project
 EXAMPLES=(
-  "simple_box"
-  "materials_demo"
-  "texture_demo"
-  "hierarchy_demo"
-  "custom_mesh_demo"
-  "primitives_demo"
-  "pbr_materials_demo"
-  "instancing_demo"
-  "terrain_demo"
   "animation_demo"
+  "custom_mesh_demo"
+  "discrete_normal_regions_demo"
   "emissive_mapping_demo"
+  "hierarchy_demo"
+  "instancing_demo"
+  "materials_demo"
   "metalness_demo"
   "normal_mapping_demo"
   "occlusion_mapping_demo"
+  "panel_grid_demo"
+  "pbr_materials_demo"
+  "primitives_demo"
   "roughness_demo"
   "rustacean_plate_demo"
+  "simple_box"
+  "skeletal_animation_demo"
   "specular_glossiness_demo"
+  "terrain_demo"
+  "texture_demo"
 )
 
 # Colors for output
@@ -77,6 +80,7 @@ if [ $PASSED -eq $TOTAL ]; then
   echo -e "\n${GREEN}All examples ran successfully!${NC}"
 else
   echo -e "\n${RED}Some examples failed to run. Please check the output above for details.${NC}"
+  exit 1
 fi
 
 # List generated GLB files

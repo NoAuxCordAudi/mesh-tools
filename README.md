@@ -8,8 +8,9 @@ A Rust library for creating, manipulating, and exporting 3D meshes with support 
 - Primitive shape generators (box, plane, sphere, cylinder, cone, torus, icosahedron)
 - Material creation with PBR properties (base color, metallic, roughness, emissive)
 - Scene hierarchy and node transformation support
-- Export to binary GLB format with Blender compatibility
-- Comprehensive vertex attribute handling (positions, normals, UVs, tangents, colors)
+- Export to spec-conformant binary GLB (chunk alignment and padding handled); the document is validated first
+- Skinning and keyframe animation (see [docs/SKINNING.md](docs/SKINNING.md))
+- Vertex attributes: positions, normals, multiple UV sets, and skinning joints/weights
 - Lightweight math types via mint instead of nalgebra
 
 ## Primitive Shapes
@@ -29,7 +30,7 @@ The library provides generators for these common 3D shapes:
 ### Creating a Simple Box
 
 ```rust
-use gltf_export::GltfBuilder;
+use mesh_tools::GltfBuilder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new glTF builder
@@ -92,11 +93,11 @@ let sphere_mesh = builder.create_sphere(
 
 ## Mesh Export
 
-The library provides GLB (binary glTF) export functionality that is compatible with Blender and other 3D software:
+The library exports GLB (binary glTF) and validates the document before writing it:
 
 - Proper handling of chunk types and alignment
 - Binary data padding and structure according to glTF spec
-- Support for all vertex attributes (positions, normals, UVs, etc.)
+- Vertex attributes: positions, normals, UV sets and skinning joints/weights
 
 ## Math Types and Compatibility Layer
 
@@ -142,11 +143,17 @@ cargo run --example primitives_demo
 The library includes several examples demonstrating different features:
 
 - `simple_box.rs`: Basic box creation and export
-- `primitives_demo.rs`: All supported primitive shapes with different materials
+- `primitives_demo.rs`: Plane, sphere, cylinder, cone, torus and icosahedron with different materials
 - `materials_demo.rs`: Various material types and properties
 - `texture_demo.rs`: Texture mapping and image handling
 - `custom_mesh_demo.rs`: Creating custom meshes from vertex data
 - `hierarchy_demo.rs`: Building scene hierarchies with multiple nodes
+- `animation_demo.rs`: Translation, rotation and scale keyframe animation
+- `skeletal_animation_demo.rs`: A skinned arm that bends (joints, weights, linear and cubic-spline animation)
+
+More examples live in `examples/` (texture maps, PBR channel demos, terrain, instancing, panel grids, ...).
+
+Run every example with `./run_all_examples.sh` (it exits non-zero if any example fails).
 
 ### Primitives Demo
 
@@ -163,36 +170,36 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | Feature Category | Feature | Support Level | Notes |
 |-----------------|---------|---------------|-------|
 | **Core** |||||
-| | Asset Information | ✅ Full | Version, generator, copyright metadata |
-| | Scenes | ✅ Full | Multiple scenes, default scenes |
-| | Nodes | ✅ Full | Hierarchies, transforms (TRS) |
-| | Buffers | ✅ Full | Binary data handling, GLB chunks |
-| | Buffer Views | ✅ Full | Stride, target support |
-| | Accessors | ✅ Full | All types and component types |
+| | Asset Information | ⚠️ Partial | Version 2.0 and generator are set by the builder; `copyright` is in the model but has no setter |
+| | Scenes | ⚠️ Partial | Multiple scenes; the first scene added becomes the default (no API to change it) |
+| | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; the builder never sets `matrix`; no camera or weights |
+| | Buffers | ⚠️ Partial | One embedded buffer exported as the GLB BIN chunk; no external `.bin` or data-URI export |
+| | Buffer Views | ⚠️ Partial | `target` is set by the builder; `byteStride` exists in the model but the builder never writes it (no interleaved attributes) |
+| | Accessors | ⚠️ Partial | Builder emits FLOAT VEC2/3/4, u8/u16/u32 indices and joints, MAT4 inverse bind matrices, and animation data; no sparse or normalized accessors |
 | **Geometry** |||||
-| | Meshes | ✅ Full | Multiple primitives per mesh |
-| | Primitive Types | ⚠️ Partial | Triangles only, no points or lines |
+| | Meshes | ⚠️ Partial | Multiple primitives per mesh; no tangent or vertex-color helpers, no mesh weights |
+| | Primitive Types | ⚠️ Partial | Built-in generators emit triangles only; `Primitive.mode` can be set by hand for other modes, with no helpers or validation |
 | | Morph Targets | ❌ None | Not yet implemented |
 | **Materials** |||||
-| | PBR Materials | ✅ Full | Base color, metallic, roughness |
+| | PBR Materials | ✅ Full | Metallic-roughness model: base color, metallic, roughness, emissive, normal and occlusion textures |
 | | Alpha Modes | ✅ Full | Opaque, mask, blend modes |
 | | Double Sided | ✅ Full | Flag for double-sided rendering |
-| | Material Variations | ✅ Full | Both metallic-roughness and specular-glossiness (KHR_materials_pbrSpecularGlossiness) |
+| | Material Variations | ⚠️ Partial | Metallic-roughness and specular-glossiness (KHR_materials_pbrSpecularGlossiness); texture `texCoord` is fixed to 0 |
 | **Textures** |||||
-| | Samplers | ✅ Full | Filter modes, wrap modes |
-| | Images | ✅ Full | Embedded and external references |
-| | Texture Coordinates | ✅ Full | Multiple UV sets |
+| | Samplers | ⚠️ Partial | The model supports all filter and wrap modes; the builder creates a default sampler only |
+| | Images | ⚠️ Partial | Embedded PNG/JPEG through a buffer view; external `uri` is in the model but has no builder support |
+| | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets on meshes; specular-glossiness textures use set 0 |
 | **Animation** |||||
-| | Animation | ✅ Full | Keyframe animation for translations, rotations, and scales |
-| | Skinning | ❌ None | Not yet implemented |
+| | Animation | ⚠️ Partial | Translation, rotation and scale tracks with LINEAR, STEP and CUBICSPLINE interpolation; no morph-target weights animation |
+| | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights, no morph targets |
 | **Cameras** |||||
 | | Cameras | ❌ None | Not yet implemented |
 | **Extensions** |||||
-| | KHR_materials_pbrSpecularGlossiness | ✅ Full | Specular-glossiness PBR material workflow |
+| | KHR_materials_pbrSpecularGlossiness | ⚠️ Partial | Specular-glossiness workflow; texture `texCoord` is fixed to 0 |
 | | KHR_materials_unlit | ❌ None | Not yet implemented |
 | | KHR_texture_transform | ❌ None | Not yet implemented |
 | | KHR_mesh_quantization | ❌ None | Not yet implemented |
-| | Custom Extensions | ❌ None | Not yet implemented |
+| | Custom Extensions | ⚠️ Partial | Root-level `extensions`, `extensionsUsed`, `extensionsRequired` and `extras` are stored as raw JSON; no builder API |
 
 ### Legend
 

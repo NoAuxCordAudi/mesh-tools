@@ -5,8 +5,8 @@
 //! by a hierarchy of joints (bones).
 
 use crate::builder::GltfBuilder;
-use crate::models::{Skin, Node};
-use crate::error::Result;
+use crate::models::{Primitive, Skin};
+use crate::error::{GltfError, Result};
 use mint::{ColumnMatrix4};
 
 impl GltfBuilder {
@@ -15,12 +15,26 @@ impl GltfBuilder {
     /// A skin contains a list of joint node indices and their inverse bind matrices.
     /// The inverse bind matrices transform vertices from model space to joint space.
     ///
+    /// `JOINTS_0` values in a skinned primitive index into `joints` (the *slot*), not
+    /// into the node list.
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - Optional name for the skin
-    /// * `joints` - Vector of node indices that represent the joints/bones
-    /// * `inverse_bind_matrices_accessor` - Index of accessor containing 4x4 inverse bind matrices
-    /// * `skeleton` - Optional index of the skeleton root node
+    /// * `joints` - Node indices of the joints/bones; non-empty and unique
+    /// * `inverse_bind_matrices_accessor` - Optional accessor of FLOAT `MAT4` inverse bind
+    ///   matrices with at least one entry per joint
+    /// * `skeleton` - Optional skeleton root. Must be a joint or an ancestor of every joint
+    ///
+    /// # Errors
+    ///
+    /// Returns `GltfError::InvalidInput` (with a message naming the offending index) if:
+    /// - `joints` is empty or contains duplicates or nonexistent nodes
+    /// - the joints do not share a common root node
+    /// - `skeleton` does not exist or is not an ancestor-or-self of every joint
+    /// - the accessor does not exist, is not FLOAT `MAT4`, or has fewer entries than joints
+    ///
+    /// Nothing is added to the document on error.
     ///
     /// # Returns
     ///
@@ -31,7 +45,33 @@ impl GltfBuilder {
         joints: Vec<usize>,
         inverse_bind_matrices_accessor: Option<usize>,
         skeleton: Option<usize>,
-    ) -> usize {
+    ) -> Result<usize> {
+        self.validate_skin_joints(&joints, skeleton)?;
+
+        if let Some(acc_index) = inverse_bind_matrices_accessor {
+            let accessor = self
+                .gltf
+                .accessors
+                .as_ref()
+                .and_then(|a| a.get(acc_index))
+                .ok_or_else(|| GltfError::InvalidInput(format!(
+                    "inverse bind matrix accessor {acc_index} does not exist"
+                )))?;
+            if accessor.type_ != "MAT4" || accessor.component_type != 5126 {
+                return Err(GltfError::InvalidInput(format!(
+                    "inverse bind matrix accessor {acc_index} must be FLOAT MAT4, found type {} component {}",
+                    accessor.type_, accessor.component_type
+                )));
+            }
+            if accessor.count < joints.len() {
+                return Err(GltfError::InvalidInput(format!(
+                    "inverse bind matrix accessor {acc_index} has {} entries for {} joints",
+                    accessor.count,
+                    joints.len()
+                )));
+            }
+        }
+
         let skin = Skin {
             name,
             joints,
@@ -39,14 +79,146 @@ impl GltfBuilder {
             skeleton,
         };
 
-        if let Some(ref mut skins) = self.gltf.skins {
-            skins.push(skin);
-            skins.len() - 1
-        } else {
-            // This shouldn't happen if new() is called properly
-            self.gltf.skins = Some(vec![skin]);
-            0
+        let skins = self.gltf.skins.get_or_insert_with(Vec::new);
+        skins.push(skin);
+        Ok(skins.len() - 1)
+    }
+
+    /// Add a skin and compute its inverse bind matrices from the current node hierarchy.
+    ///
+    /// The nodes are assumed to be in their bind pose right now. Build the joint hierarchy
+    /// (parenting and transforms) *before* calling this. See
+    /// [`compute_inverse_bind_matrices`](Self::compute_inverse_bind_matrices) for limits.
+    ///
+    /// Validates before writing, so nothing is added on error.
+    pub fn add_skin_from_joints(
+        &mut self,
+        name: Option<String>,
+        joints: Vec<usize>,
+        skeleton: Option<usize>,
+    ) -> Result<usize> {
+        self.validate_skin_joints(&joints, skeleton)?;
+        let matrices = self.compute_inverse_bind_matrices(&joints)?;
+        let accessor = self.create_inverse_bind_matrices_accessor_from_f32(&matrices)?;
+        self.add_skin(name, joints, Some(accessor), skeleton)
+    }
+
+    /// Compute the inverse bind matrix of each joint: the inverse of the joint's world
+    /// transform in the current node hierarchy.
+    ///
+    /// Each matrix is returned as 16 floats in glTF column-major order (translation in
+    /// elements 12..15). A node's local transform is its `matrix` if set, otherwise
+    /// `translation * rotation * scale`. Matrices are assumed affine (bottom row 0,0,0,1).
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if a joint does not exist, the hierarchy contains a cycle,
+    /// or a world transform is singular (for example a zero scale).
+    pub fn compute_inverse_bind_matrices(&self, joints: &[usize]) -> Result<Vec<[f32; 16]>> {
+        joints
+            .iter()
+            .map(|&joint| {
+                let world = self.world_matrix(joint)?;
+                invert_affine(&world).ok_or_else(|| GltfError::InvalidInput(format!(
+                    "world transform of joint node {joint} is singular and cannot be inverted"
+                )))
+            })
+            .collect()
+    }
+
+    /// World matrix of a node: product of local matrices from the root down to the node.
+    fn world_matrix(&self, node: usize) -> Result<[f32; 16]> {
+        let nodes = self.gltf.nodes.as_deref().unwrap_or(&[]);
+        let mut world = IDENTITY;
+        let mut current = Some(node);
+        let mut steps = 0;
+        while let Some(i) = current {
+            let n = nodes.get(i).ok_or_else(|| {
+                GltfError::InvalidInput(format!("node {i} does not exist"))
+            })?;
+            steps += 1;
+            if steps > nodes.len() {
+                return Err(GltfError::InvalidInput(format!(
+                    "node hierarchy above node {node} contains a cycle"
+                )));
+            }
+            let local = n.matrix.unwrap_or_else(|| {
+                local_trs_matrix(
+                    n.translation.unwrap_or([0.0; 3]),
+                    n.rotation.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                    n.scale.unwrap_or([1.0; 3]),
+                )
+            });
+            // Walking up: world = parent_local * (world so far)
+            world = mat_mul(&local, &world);
+            current = self.node_parents.get(i).copied().flatten();
         }
+        Ok(world)
+    }
+
+    /// Chain of nodes from `node` up to its root, `node` first. Errors on cycles.
+    fn ancestors_or_self(&self, node: usize) -> Result<Vec<usize>> {
+        let mut chain = vec![node];
+        let mut current = self.node_parents.get(node).copied().flatten();
+        while let Some(p) = current {
+            if chain.len() > self.node_parents.len() {
+                return Err(GltfError::InvalidInput(format!(
+                    "node hierarchy above node {node} contains a cycle"
+                )));
+            }
+            chain.push(p);
+            current = self.node_parents.get(p).copied().flatten();
+        }
+        Ok(chain)
+    }
+
+    /// Validate the joint list and skeleton root of a skin (no mutation).
+    fn validate_skin_joints(&self, joints: &[usize], skeleton: Option<usize>) -> Result<()> {
+        if joints.is_empty() {
+            return Err(GltfError::InvalidInput("skin must have at least one joint".to_string()));
+        }
+        let node_count = self.gltf.nodes.as_ref().map_or(0, |n| n.len());
+        let mut seen = std::collections::HashSet::new();
+        for &j in joints {
+            if j >= node_count {
+                return Err(GltfError::InvalidInput(format!(
+                    "joint node {j} does not exist ({node_count} nodes)"
+                )));
+            }
+            if !seen.insert(j) {
+                return Err(GltfError::InvalidInput(format!("joint node {j} is listed more than once")));
+            }
+        }
+        if let Some(s) = skeleton {
+            if s >= node_count {
+                return Err(GltfError::InvalidInput(format!(
+                    "skeleton node {s} does not exist ({node_count} nodes)"
+                )));
+            }
+        }
+
+        let mut common_root = None;
+        for &j in joints {
+            let chain = self.ancestors_or_self(j)?;
+            let root = *chain.last().expect("chain is never empty");
+            match common_root {
+                None => common_root = Some(root),
+                Some(r) if r != root => {
+                    return Err(GltfError::InvalidInput(format!(
+                        "joints do not share a common root: joint node {j} is under root {root}, others under {r}"
+                    )));
+                }
+                _ => {}
+            }
+            if let Some(s) = skeleton {
+                if !chain.contains(&s) {
+                    return Err(GltfError::InvalidInput(format!(
+                        "skeleton node {s} is not an ancestor of (or equal to) joint node {j}"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Add a joint (bone) node to the glTF document
@@ -74,48 +246,58 @@ impl GltfBuilder {
         self.add_node(name, None, translation, rotation, scale)
     }
 
-    /// Create inverse bind matrices accessor for a skin
+    /// Create an inverse bind matrices accessor from `mint` column-major matrices.
     ///
-    /// Inverse bind matrices are used to transform vertices from model space
-    /// to the local space of each joint. Each matrix is 4x4 and stored as
-    /// 16 consecutive floats in column-major order.
+    /// `mint::ColumnMatrix4` fields `x`, `y`, `z`, `w` are the four *columns*, so the
+    /// translation of a transform goes in `w.x`, `w.y`, `w.z` (not in each column's `.w`).
+    /// See [`create_inverse_bind_matrices_accessor_from_f32`](Self::create_inverse_bind_matrices_accessor_from_f32).
     ///
-    /// # Arguments
+    /// # Errors
     ///
-    /// * `matrices` - Vector of 4x4 matrices (one per joint)
+    /// `GltfError::InvalidInput` if `matrices` is empty.
+    pub fn create_inverse_bind_matrices_accessor(&mut self, matrices: &[ColumnMatrix4<f32>]) -> Result<usize> {
+        let flat: Vec<[f32; 16]> = matrices
+            .iter()
+            .map(|m| {
+                let c = [m.x, m.y, m.z, m.w];
+                let mut out = [0.0f32; 16];
+                for (i, col) in c.iter().enumerate() {
+                    out[i * 4..i * 4 + 4].copy_from_slice(&[col.x, col.y, col.z, col.w]);
+                }
+                out
+            })
+            .collect();
+        self.create_inverse_bind_matrices_accessor_from_f32(&flat)
+    }
+
+    /// Create an inverse bind matrices accessor from raw glTF-layout matrices.
     ///
-    /// # Returns
+    /// Each matrix is 16 floats in column-major order: elements 0..4 are the first
+    /// column, and the translation is elements 12..15.
     ///
-    /// The index of the created accessor
-    pub fn create_inverse_bind_matrices_accessor(&mut self, matrices: &[ColumnMatrix4<f32>]) -> usize {
-        let mut matrix_data = Vec::new();
-        
-        // Convert matrices to flat f32 array in column-major order
-        for matrix in matrices {
-            // glTF uses column-major order for matrices
-            let cols = [matrix.x, matrix.y, matrix.z, matrix.w];
-            for col in &cols {
-                matrix_data.push(col.x);
-                matrix_data.push(col.y);
-                matrix_data.push(col.z);
-                matrix_data.push(col.w);
+    /// The buffer view has no `target`, as the spec forbids one on inverse bind matrix data.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if `matrices` is empty or contains a non-finite value.
+    pub fn create_inverse_bind_matrices_accessor_from_f32(&mut self, matrices: &[[f32; 16]]) -> Result<usize> {
+        if matrices.is_empty() {
+            return Err(GltfError::InvalidInput("at least one inverse bind matrix is required".to_string()));
+        }
+        if let Some(i) = matrices.iter().position(|m| m.iter().any(|v| !v.is_finite())) {
+            return Err(GltfError::InvalidInput(format!("inverse bind matrix {i} contains a non-finite value")));
+        }
+
+        let mut bytes = Vec::with_capacity(matrices.len() * 64);
+        for m in matrices {
+            for v in m {
+                bytes.extend_from_slice(&v.to_le_bytes());
             }
         }
 
-        // Convert to bytes
-        let mut bytes = Vec::new();
-        for &value in &matrix_data {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-
-        // Add buffer data
         let (byte_offset, byte_length) = self.add_buffer_data(&bytes);
-
-        // Create buffer view
         let buffer_view_index = self.add_buffer_view(byte_offset, byte_length, None);
-
-        // Create accessor
-        self.add_accessor(
+        Ok(self.add_accessor(
             buffer_view_index,
             5126, // FLOAT
             matrices.len(),
@@ -123,12 +305,18 @@ impl GltfBuilder {
             None,
             None,
             None,
-        )
+        ))
     }
 
     /// Add a node with an associated skin
     ///
     /// This creates a node that references a mesh and applies skinning using the specified skin.
+    /// The node goes through [`GltfBuilder::add_node`], so its rotation is normalized and it is
+    /// registered for parent tracking like any other node.
+    ///
+    /// Note: per the glTF spec, the local transform of a skinned node is ignored by
+    /// renderers; the joints' transforms drive the deformation. Pass `None` for
+    /// `translation`, `rotation` and `scale` unless you have a reason not to.
     ///
     /// # Arguments
     ///
@@ -138,6 +326,10 @@ impl GltfBuilder {
     /// * `translation` - Optional translation
     /// * `rotation` - Optional rotation quaternion [x, y, z, w]
     /// * `scale` - Optional scale factors
+    ///
+    /// # Errors
+    ///
+    /// Returns `GltfError::InvalidIndex` if `mesh` or `skin` does not exist.
     ///
     /// # Returns
     ///
@@ -150,25 +342,18 @@ impl GltfBuilder {
         translation: Option<[f32; 3]>,
         rotation: Option<[f32; 4]>,
         scale: Option<[f32; 3]>,
-    ) -> usize {
-        let node = Node {
-            name,
-            mesh: Some(mesh),
-            skin: Some(skin),
-            children: None,
-            translation,
-            rotation,
-            scale,
-            matrix: None,
-        };
-
-        if let Some(ref mut nodes) = self.gltf.nodes {
-            nodes.push(node);
-            nodes.len() - 1
-        } else {
-            self.gltf.nodes = Some(vec![node]);
-            0
+    ) -> crate::error::Result<usize> {
+        let mesh_count = self.gltf.meshes.as_ref().map_or(0, |m| m.len());
+        let skin_count = self.gltf.skins.as_ref().map_or(0, |s| s.len());
+        if mesh >= mesh_count || skin >= skin_count {
+            return Err(crate::error::GltfError::InvalidIndex);
         }
+
+        let index = self.add_node(name, Some(mesh), translation, rotation, scale);
+        if let Some(node) = self.gltf.nodes.as_mut().and_then(|n| n.get_mut(index)) {
+            node.skin = Some(skin);
+        }
+        Ok(index)
     }
 
     /// Create a simple linear bone chain
@@ -216,21 +401,17 @@ impl GltfBuilder {
         Ok(joint_indices)
     }
 
-    /// Create a skinned mesh primitive with joint weights
+    /// Create a skinned mesh with a single `JOINTS_0`/`WEIGHTS_0` set.
     ///
-    /// This method creates a mesh primitive that includes joint and weight attributes
-    /// for skeletal animation.
+    /// Convenience wrapper over [`create_skinned_primitive`](Self::create_skinned_primitive)
+    /// for `u16` joints and indices. Because no skin is known here, joint indices are not
+    /// range-checked against a joint count; the other validation still applies.
     ///
-    /// # Arguments
+    /// `joints` hold skin *slots* (positions in the skin's `joints` list), not node indices.
     ///
-    /// * `name` - Optional name for the mesh
-    /// * `positions` - Vertex positions (3 floats per vertex)
-    /// * `indices` - Triangle indices
-    /// * `normals` - Optional vertex normals
-    /// * `texcoords` - Optional texture coordinates
-    /// * `joints` - Joint indices for each vertex (4 joints per vertex)
-    /// * `weights` - Joint weights for each vertex (4 weights per vertex, should sum to 1.0)
-    /// * `material` - Optional material index
+    /// # Errors
+    ///
+    /// See [`create_skinned_primitive`](Self::create_skinned_primitive). Nothing is added on error.
     ///
     /// # Returns
     ///
@@ -246,164 +427,443 @@ impl GltfBuilder {
         weights: &[[f32; 4]],
         material: Option<usize>,
     ) -> Result<usize> {
-        use crate::models::Primitive;
+        let indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
+        let set = SkinSet {
+            joints: JointIndices::U16(joints.to_vec()),
+            weights: weights.to_vec(),
+        };
+        let primitive = self.create_skinned_primitive(
+            positions,
+            Some(&indices),
+            normals,
+            texcoords,
+            &[set],
+            u16::MAX as usize + 1,
+            material,
+        )?;
+        Ok(self.add_mesh(name, vec![primitive]))
+    }
+
+    /// Create a triangle primitive with skinning attributes (`JOINTS_n` / `WEIGHTS_n`).
+    ///
+    /// # Arguments
+    ///
+    /// * `positions` - `x, y, z` per vertex
+    /// * `indices` - triangle indices, or `None` for non-indexed geometry
+    /// * `normals` / `texcoords` - optional, 3 / 2 floats per vertex
+    /// * `skin_sets` - one or more influence sets; set `n` becomes `JOINTS_n`/`WEIGHTS_n`
+    /// * `joint_count` - number of joints in the skin this primitive will be used with;
+    ///   every joint index with a non-zero weight must be below it
+    /// * `material` - optional material index
+    ///
+    /// Index width is chosen automatically: `u16` unless an index is 65535 (the primitive
+    /// restart value, which glTF forbids as an index) or larger, then `u32`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` (the message names the vertex or index at fault) if:
+    /// - positions are empty, not a multiple of 3, or non-finite
+    /// - normals/texcoords/sets don't match the vertex count
+    /// - indices are out of range or not a multiple of 3 (or, non-indexed, the vertex count
+    ///   is not a multiple of 3)
+    /// - a weight is negative or non-finite, or a vertex's weights across all sets do not
+    ///   sum to 1 within `1e-5` (see [`normalize_weights`])
+    /// - a non-zero weight references a joint `>= joint_count`, or the same joint twice
+    ///   on one vertex
+    ///
+    /// All validation runs before anything is written, so a failed call leaves the
+    /// document untouched.
+    pub fn create_skinned_primitive(
+        &mut self,
+        positions: &[f32],
+        indices: Option<&[u32]>,
+        normals: Option<&[f32]>,
+        texcoords: Option<&[f32]>,
+        skin_sets: &[SkinSet],
+        joint_count: usize,
+        material: Option<usize>,
+    ) -> Result<Primitive> {
+        if skin_sets.is_empty() {
+            return Err(invalid("at least one skin set (JOINTS_0/WEIGHTS_0) is required".to_string()));
+        }
+        let texcoord_sets: Vec<&[f32]> = texcoords.into_iter().collect();
+        self.create_primitive_checked(positions, indices, normals, &texcoord_sets, skin_sets, joint_count, material)
+    }
+
+    /// Validate, then write, a triangle primitive. `skin_sets` may be empty for an
+    /// unskinned primitive; any number of texcoord sets (`TEXCOORD_n`) is supported.
+    /// Shared by [`create_skinned_primitive`](Self::create_skinned_primitive) and
+    /// `MeshBuilder::build_into`. Validates everything before writing anything.
+    pub(crate) fn create_primitive_checked(
+        &mut self,
+        positions: &[f32],
+        indices: Option<&[u32]>,
+        normals: Option<&[f32]>,
+        texcoord_sets: &[&[f32]],
+        skin_sets: &[SkinSet],
+        joint_count: usize,
+        material: Option<usize>,
+    ) -> Result<Primitive> {
+        use crate::constants::{buffer_view_target::{ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER}, component_type};
         use std::collections::HashMap;
 
-        // Validate input data
-        let vertex_count = positions.len() / 3;
-        if joints.len() != vertex_count || weights.len() != vertex_count {
-            return Err(crate::error::GltfError::InvalidInput(
-                "Joints and weights must match vertex count".to_string()
-            ));
-        }
+        let vertex_count = validate_skinned_geometry(
+            positions, indices, normals, texcoord_sets, skin_sets, joint_count,
+        )?;
 
-        // Create position accessor
-        let mut pos_bytes = Vec::new();
-        for &value in positions {
-            pos_bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        let (pos_offset, pos_length) = self.add_buffer_data(&pos_bytes);
-        let pos_buffer_view = self.add_buffer_view(pos_offset, pos_length, Some(34962)); // ARRAY_BUFFER
-        let pos_accessor = self.add_accessor(
-            pos_buffer_view,
-            5126, // FLOAT
-            vertex_count,
-            "VEC3".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        // Create indices accessor
-        let mut idx_bytes = Vec::new();
-        for &value in indices {
-            idx_bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        let (idx_offset, idx_length) = self.add_buffer_data(&idx_bytes);
-        let idx_buffer_view = self.add_buffer_view(idx_offset, idx_length, Some(34963)); // ELEMENT_ARRAY_BUFFER
-        let idx_accessor = self.add_accessor(
-            idx_buffer_view,
-            5123, // UNSIGNED_SHORT
-            indices.len(),
-            "SCALAR".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        // Create joints accessor (as UNSIGNED_SHORT)
-        let mut joints_bytes = Vec::new();
-        for joint_set in joints {
-            for &joint in joint_set {
-                joints_bytes.extend_from_slice(&joint.to_le_bytes());
-            }
-        }
-        let (joints_offset, joints_length) = self.add_buffer_data(&joints_bytes);
-        let joints_buffer_view = self.add_buffer_view(joints_offset, joints_length, Some(34962)); // ARRAY_BUFFER
-        let joints_accessor = self.add_accessor(
-            joints_buffer_view,
-            5123, // UNSIGNED_SHORT
-            vertex_count,
-            "VEC4".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        // Create weights accessor
-        let mut weights_bytes = Vec::new();
-        for weight_set in weights {
-            for &weight in weight_set {
-                weights_bytes.extend_from_slice(&weight.to_le_bytes());
-            }
-        }
-        let (weights_offset, weights_length) = self.add_buffer_data(&weights_bytes);
-        let weights_buffer_view = self.add_buffer_view(weights_offset, weights_length, Some(34962)); // ARRAY_BUFFER
-        let weights_accessor = self.add_accessor(
-            weights_buffer_view,
-            5126, // FLOAT
-            vertex_count,
-            "VEC4".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        // Create normals accessor if provided
-        let normal_accessor = if let Some(normals) = normals {
-            let mut norm_bytes = Vec::new();
-            for &value in normals {
-                norm_bytes.extend_from_slice(&value.to_le_bytes());
-            }
-            let (norm_offset, norm_length) = self.add_buffer_data(&norm_bytes);
-            let norm_buffer_view = self.add_buffer_view(norm_offset, norm_length, Some(34962)); // ARRAY_BUFFER
-            Some(self.add_accessor(
-                norm_buffer_view,
-                5126, // FLOAT
-                vertex_count,
-                "VEC3".to_string(),
-                None,
-                None,
-                None,
-            ))
-        } else {
-            None
-        };
-
-        // Create texcoord accessor if provided
-        let texcoord_accessor = if let Some(texcoords) = texcoords {
-            let mut tex_bytes = Vec::new();
-            for &value in texcoords {
-                tex_bytes.extend_from_slice(&value.to_le_bytes());
-            }
-            let (tex_offset, tex_length) = self.add_buffer_data(&tex_bytes);
-            let tex_buffer_view = self.add_buffer_view(tex_offset, tex_length, Some(34962)); // ARRAY_BUFFER
-            Some(self.add_accessor(
-                tex_buffer_view,
-                5126, // FLOAT
-                vertex_count,
-                "VEC2".to_string(),
-                None,
-                None,
-                None,
-            ))
-        } else {
-            None
-        };
-
-        // Build attributes
+        // ---- All input is valid; from here on we only write. ----
         let mut attributes = HashMap::new();
-        attributes.insert("POSITION".to_string(), pos_accessor);
-        if let Some(normal_acc) = normal_accessor {
-            attributes.insert("NORMAL".to_string(), normal_acc);
-        }
-        if let Some(tex_acc) = texcoord_accessor {
-            attributes.insert("TEXCOORD_0".to_string(), tex_acc);
-        }
-        attributes.insert("JOINTS_0".to_string(), joints_accessor);
-        attributes.insert("WEIGHTS_0".to_string(), weights_accessor);
 
-        // Create primitive
-        let primitive = Primitive {
+        let (min, max) = crate::mesh::calculate_bounds(positions);
+        let pos_bytes = f32_bytes(positions);
+        attributes.insert(
+            "POSITION".to_string(),
+            self.write_attribute(&pos_bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", Some(min), Some(max)),
+        );
+        if let Some(n) = normals {
+            attributes.insert(
+                "NORMAL".to_string(),
+                self.write_attribute(&f32_bytes(n), ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", None, None),
+            );
+        }
+        for (n, t) in texcoord_sets.iter().enumerate() {
+            attributes.insert(
+                format!("TEXCOORD_{n}"),
+                self.write_attribute(&f32_bytes(t), ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC2", None, None),
+            );
+        }
+        for (n, set) in skin_sets.iter().enumerate() {
+            let (joint_bytes, joint_type) = match &set.joints {
+                JointIndices::U8(j) => (j.iter().flatten().copied().collect::<Vec<u8>>(), component_type::UNSIGNED_BYTE),
+                JointIndices::U16(j) => (
+                    j.iter().flatten().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>(),
+                    component_type::UNSIGNED_SHORT,
+                ),
+            };
+            attributes.insert(
+                format!("JOINTS_{n}"),
+                self.write_attribute(&joint_bytes, ARRAY_BUFFER, joint_type, vertex_count, "VEC4", None, None),
+            );
+            let weight_bytes: Vec<u8> = set.weights.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+            attributes.insert(
+                format!("WEIGHTS_{n}"),
+                self.write_attribute(&weight_bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC4", None, None),
+            );
+        }
+
+        let index_accessor = indices.map(|idx| {
+            // 65535 is the primitive-restart value and may not be used as an index.
+            if idx.iter().all(|&i| i < 65535) {
+                let bytes: Vec<u8> = idx.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
+                self.write_attribute(&bytes, ELEMENT_ARRAY_BUFFER, component_type::UNSIGNED_SHORT, idx.len(), "SCALAR", None, None)
+            } else {
+                let bytes: Vec<u8> = idx.iter().flat_map(|i| i.to_le_bytes()).collect();
+                self.write_attribute(&bytes, ELEMENT_ARRAY_BUFFER, component_type::UNSIGNED_INT, idx.len(), "SCALAR", None, None)
+            }
+        });
+
+        Ok(Primitive {
             attributes,
-            indices: Some(idx_accessor),
+            indices: index_accessor,
             material,
-            mode: Some(4), // TRIANGLES
-        };
+            mode: Some(crate::constants::primitive_mode::TRIANGLES),
+        })
+    }
 
-        // Create mesh
-        let mesh = crate::models::Mesh {
-            name: name.clone(),
-            primitives: vec![primitive],
-        };
+    /// Write `bytes` as a new buffer view + accessor and return the accessor index.
+    fn write_attribute(
+        &mut self,
+        bytes: &[u8],
+        target: usize,
+        component_type: usize,
+        count: usize,
+        type_: &str,
+        min: Option<Vec<f32>>,
+        max: Option<Vec<f32>>,
+    ) -> usize {
+        let (offset, length) = self.add_buffer_data(bytes);
+        let view = self.add_buffer_view(offset, length, Some(target));
+        self.add_accessor(view, component_type, count, type_.to_string(), None, min, max)
+    }
+}
 
-        // Add mesh to document
-        if let Some(ref mut meshes) = self.gltf.meshes {
-            meshes.push(mesh);
-            Ok(meshes.len() - 1)
-        } else {
-            self.gltf.meshes = Some(vec![mesh]);
-            Ok(0)
+/// Joint indices of one influence set (`JOINTS_n`): four *skin slots* per vertex.
+///
+/// A slot is a position in the skin's `joints` list, not a node index.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JointIndices {
+    U8(Vec<[u8; 4]>),
+    U16(Vec<[u16; 4]>),
+}
+
+impl JointIndices {
+    fn len(&self) -> usize {
+        match self {
+            JointIndices::U8(v) => v.len(),
+            JointIndices::U16(v) => v.len(),
         }
     }
+
+    fn get(&self, vertex: usize) -> [usize; 4] {
+        match self {
+            JointIndices::U8(v) => v[vertex].map(usize::from),
+            JointIndices::U16(v) => v[vertex].map(usize::from),
+        }
+    }
+}
+
+/// One set of four joint influences per vertex (`JOINTS_n` + `WEIGHTS_n`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinSet {
+    pub joints: JointIndices,
+    /// Weight for each joint above, as `f32`. Across all sets, a vertex's weights sum to 1.
+    pub weights: Vec<[f32; 4]>,
+}
+
+/// Maximum allowed deviation of a vertex's weight sum from 1.0.
+const WEIGHT_SUM_TOLERANCE: f32 = 1e-5;
+
+fn invalid(msg: String) -> GltfError {
+    GltfError::InvalidInput(msg)
+}
+
+fn f32_bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// Validate everything about a skinned primitive without mutating anything.
+/// Returns the vertex count.
+fn validate_skinned_geometry(
+    positions: &[f32],
+    indices: Option<&[u32]>,
+    normals: Option<&[f32]>,
+    texcoord_sets: &[&[f32]],
+    skin_sets: &[SkinSet],
+    joint_count: usize,
+) -> Result<usize> {
+    if positions.is_empty() || positions.len() % 3 != 0 {
+        return Err(invalid(format!(
+            "positions must be a non-empty multiple of 3 floats, got {}", positions.len()
+        )));
+    }
+    if let Some(i) = positions.iter().position(|v| !v.is_finite()) {
+        return Err(invalid(format!("position value {i} is not finite")));
+    }
+    let vertex_count = positions.len() / 3;
+
+    if let Some(n) = normals {
+        if n.len() != positions.len() {
+            return Err(invalid(format!("normals have {} floats, expected {}", n.len(), positions.len())));
+        }
+    }
+    for (n, t) in texcoord_sets.iter().enumerate() {
+        if t.len() != vertex_count * 2 {
+            return Err(invalid(format!("texcoord set {n} has {} floats, expected {}", t.len(), vertex_count * 2)));
+        }
+    }
+
+    match indices {
+        Some(idx) => {
+            if idx.is_empty() || idx.len() % 3 != 0 {
+                return Err(invalid(format!("index count must be a non-empty multiple of 3, got {}", idx.len())));
+            }
+            if let Some((pos, &bad)) = idx.iter().enumerate().find(|(_, &i)| i as usize >= vertex_count) {
+                return Err(invalid(format!("index {pos} is {bad} but there are only {vertex_count} vertices")));
+            }
+        }
+        None if vertex_count % 3 != 0 => {
+            return Err(invalid(format!("non-indexed geometry needs a multiple of 3 vertices, got {vertex_count}")));
+        }
+        None => {}
+    }
+
+    if skin_sets.is_empty() {
+        return Ok(vertex_count); // unskinned primitive: nothing more to check
+    }
+    if joint_count == 0 {
+        return Err(invalid("joint_count must be at least 1".to_string()));
+    }
+    for (n, set) in skin_sets.iter().enumerate() {
+        if set.joints.len() != vertex_count || set.weights.len() != vertex_count {
+            return Err(invalid(format!(
+                "skin set {n}: {} joint entries and {} weight entries for {vertex_count} vertices",
+                set.joints.len(), set.weights.len()
+            )));
+        }
+    }
+
+    for v in 0..vertex_count {
+        let mut sum = 0.0f32;
+        let mut used: Vec<usize> = Vec::new();
+        for (n, set) in skin_sets.iter().enumerate() {
+            let joints = set.joints.get(v);
+            for (k, &w) in set.weights[v].iter().enumerate() {
+                if !w.is_finite() || w < 0.0 {
+                    return Err(invalid(format!("vertex {v}: weight {w} in set {n} slot {k} must be finite and >= 0")));
+                }
+                sum += w;
+                if w > 0.0 {
+                    let j = joints[k];
+                    if j >= joint_count {
+                        return Err(invalid(format!(
+                            "vertex {v}: joint slot {j} in set {n} is out of range for a skin with {joint_count} joints \
+                             (JOINTS_n holds skin slots, not node indices)"
+                        )));
+                    }
+                    if used.contains(&j) {
+                        return Err(invalid(format!("vertex {v}: joint slot {j} is influenced more than once")));
+                    }
+                    used.push(j);
+                }
+            }
+        }
+        if (sum - 1.0).abs() > WEIGHT_SUM_TOLERANCE {
+            return Err(invalid(format!(
+                "vertex {v}: weights sum to {sum}, expected 1.0 (see normalize_weights)"
+            )));
+        }
+    }
+    Ok(vertex_count)
+}
+
+/// Normalize each vertex's four weights so they sum to exactly 1.
+///
+/// This is an explicit opt-in: the skinned-primitive functions reject bad sums rather than
+/// silently altering data.
+///
+/// # Errors
+///
+/// `GltfError::InvalidInput` naming the vertex if a weight is negative or non-finite, or
+/// the weights sum to zero (there is nothing to normalize).
+pub fn normalize_weights(weights: &mut [[f32; 4]]) -> Result<()> {
+    for (v, w) in weights.iter().enumerate() {
+        if w.iter().any(|x| !x.is_finite() || *x < 0.0) {
+            return Err(invalid(format!("vertex {v}: weights must be finite and >= 0, got {w:?}")));
+        }
+        if w.iter().sum::<f32>() <= 0.0 {
+            return Err(invalid(format!("vertex {v}: weights sum to zero and cannot be normalized")));
+        }
+    }
+    for w in weights.iter_mut() {
+        let sum: f32 = w.iter().sum();
+        for x in w.iter_mut() {
+            *x /= sum;
+        }
+    }
+    Ok(())
+}
+
+/// Reduce arbitrarily many `(joint slot, weight)` influences per vertex to the four
+/// strongest and renormalize them, as `JOINTS_0`/`WEIGHTS_0` data.
+///
+/// Influences are sorted by descending weight (ties keep the lower joint first); unused
+/// slots are `(0, 0.0)`. This discards the weaker influences: it is lossy by design.
+///
+/// # Errors
+///
+/// `GltfError::InvalidInput` naming the vertex if a weight is negative or non-finite, or all
+/// of its weights are zero (or it has no influences).
+pub fn limit_influences(influences: &[Vec<(u16, f32)>]) -> Result<(Vec<[u16; 4]>, Vec<[f32; 4]>)> {
+    let mut joints = Vec::with_capacity(influences.len());
+    let mut weights = Vec::with_capacity(influences.len());
+    for (v, list) in influences.iter().enumerate() {
+        if list.iter().any(|(_, w)| !w.is_finite() || *w < 0.0) {
+            return Err(invalid(format!("vertex {v}: weights must be finite and >= 0")));
+        }
+        let mut sorted: Vec<(u16, f32)> = list.iter().copied().filter(|(_, w)| *w > 0.0).collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+        sorted.truncate(4);
+        let sum: f32 = sorted.iter().map(|(_, w)| w).sum();
+        if sorted.is_empty() || sum <= 0.0 {
+            return Err(invalid(format!("vertex {v}: has no positive influence weights")));
+        }
+        let mut j = [0u16; 4];
+        let mut w = [0.0f32; 4];
+        for (k, (joint, weight)) in sorted.iter().enumerate() {
+            j[k] = *joint;
+            w[k] = weight / sum;
+        }
+        joints.push(j);
+        weights.push(w);
+    }
+    Ok((joints, weights))
+}
+
+const IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0, //
+    0.0, 0.0, 0.0, 1.0,
+];
+
+/// Column-major 4x4 product `a * b`.
+fn mat_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut sum = 0.0;
+            for k in 0..4 {
+                sum += a[k * 4 + row] * b[col * 4 + k];
+            }
+            out[col * 4 + row] = sum;
+        }
+    }
+    out
+}
+
+/// Local matrix `T * R * S` in column-major order. `q` is normalized here.
+fn local_trs_matrix(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> [f32; 16] {
+    let [x, y, z, w] = GltfBuilder::normalize_quaternion(q);
+    let r = [
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w),
+        2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w),
+        2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y),
+    ]; // three columns of the rotation matrix
+    [
+        r[0] * s[0], r[1] * s[0], r[2] * s[0], 0.0,
+        r[3] * s[1], r[4] * s[1], r[5] * s[1], 0.0,
+        r[6] * s[2], r[7] * s[2], r[8] * s[2], 0.0,
+        t[0], t[1], t[2], 1.0,
+    ]
+}
+
+/// Inverse of an affine column-major matrix, or `None` if it is singular or non-finite.
+fn invert_affine(m: &[f32; 16]) -> Option<[f32; 16]> {
+    // Upper-left 3x3 (columns c0,c1,c2), computed in f64 for accuracy.
+    let a = |col: usize, row: usize| m[col * 4 + row] as f64;
+    let (a00, a10, a20) = (a(0, 0), a(0, 1), a(0, 2));
+    let (a01, a11, a21) = (a(1, 0), a(1, 1), a(1, 2));
+    let (a02, a12, a22) = (a(2, 0), a(2, 1), a(2, 2));
+
+    let c00 = a11 * a22 - a21 * a12;
+    let c01 = a20 * a12 - a10 * a22;
+    let c02 = a10 * a21 - a20 * a11;
+    let det = a00 * c00 + a01 * c01 + a02 * c02;
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    // inverse[row][col] of the 3x3 (adjugate / det)
+    let i00 = c00 * inv;
+    let i01 = (a02 * a21 - a01 * a22) * inv;
+    let i02 = (a01 * a12 - a02 * a11) * inv;
+    let i10 = c01 * inv;
+    let i11 = (a00 * a22 - a02 * a20) * inv;
+    let i12 = (a02 * a10 - a00 * a12) * inv;
+    let i20 = c02 * inv;
+    let i21 = (a01 * a20 - a00 * a21) * inv;
+    let i22 = (a00 * a11 - a01 * a10) * inv;
+
+    let (tx, ty, tz) = (a(3, 0), a(3, 1), a(3, 2));
+    let out = [
+        i00, i10, i20, 0.0,
+        i01, i11, i21, 0.0,
+        i02, i12, i22, 0.0,
+        -(i00 * tx + i01 * ty + i02 * tz),
+        -(i10 * tx + i11 * ty + i12 * tz),
+        -(i20 * tx + i21 * ty + i22 * tz),
+        1.0,
+    ];
+    let out: [f32; 16] = out.map(|v| v as f32);
+    out.iter().all(|v| v.is_finite()).then_some(out)
 }

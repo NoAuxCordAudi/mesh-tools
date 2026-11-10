@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         checker_texture
     );
     
-    // Define a simple triangle mesh with custom UV mapping using nalgebra types
+    // Define a simple triangle mesh with custom UV mapping using mint types
     let positions = vec![
         // Position data for 3 vertices (triangle)
         mesh_tools::compat::point3::new(-1.0, -1.0, 0.0),  // Vertex 0: bottom-left
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         mesh_tools::compat::vector2::new(0.5, 0.0),  // Vertex 2: top-center
     ];
     
-    // Create the custom triangle mesh using create_simple_mesh_3d (single UV channel with nalgebra types)
+    // Create the custom triangle mesh using create_simple_mesh (single UV channel, mint types)
     let triangle_mesh = builder.create_simple_mesh(
         Some("Triangle".to_string()),
         &positions,
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(checker_material)
     );
     
-    // Define a quad mesh with multiple UV channels using nalgebra types
+    // Define a quad mesh with multiple UV channels using mint types
     let quad_positions = vec![
         // Position data for 4 vertices (quad)
         mesh_tools::compat::point3::new(-1.0, -1.0, 0.0),  // Vertex 0: bottom-left
@@ -130,7 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(uv_test_material)
     );
     
-    // Create a cube with fully custom UV mapping for each face using nalgebra types
+    // Create a cube with fully custom UV mapping for each face using mint types
     let cube_positions = vec![
         // Front face - 4 vertices
         mesh_tools::compat::point3::new(-1.0, -1.0,  1.0),  // 0: bottom-left
