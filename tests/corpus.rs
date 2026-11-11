@@ -14,7 +14,7 @@
 mod common;
 
 use mesh_tools::mesh::MeshBuilder;
-use mesh_tools::{AccessorSpec, AccessorType, AnimationPath, Bounds, SparseSpec, CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, NormalizedComponent, Triangle};
+use mesh_tools::{ExtraBuffers, AccessorSpec, AccessorType, AnimationPath, Bounds, SparseSpec, CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, NormalizedComponent, Triangle};
 use mesh_tools::compat::{point3, vector2, vector3};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -515,6 +515,23 @@ fn extensions_everywhere_doc() -> GltfBuilder {
     b
 }
 
+/// Three buffers: a box in buffer 0 and one triangle each in buffers 1 and 2 (named).
+fn multi_buffer_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let box_mesh = b.create_box(1.0);
+    let mut nodes = vec![b.add_node(Some("Box".into()), Some(box_mesh), None, None, None)];
+    for (buf, x) in [(1usize, 2.0f32), (2, 4.0)] {
+        b.add_buffer(Some(format!("extra{buf}"))).unwrap();
+        b.set_write_buffer(buf).unwrap();
+        let pos = [point3::new(x, 0.0, 0.0), point3::new(x + 1.0, 0.0, 0.0), point3::new(x, 1.0, 0.0)];
+        let m = b.create_simple_mesh(Some(format!("Tri{buf}")), &pos, &[Triangle::new(0, 1, 2)], None, None, None);
+        nodes.push(b.add_node(None, Some(m), None, None, None));
+    }
+    b.set_write_buffer(0).unwrap();
+    b.add_scene(Some("S".into()), Some(nodes));
+    b
+}
+
 fn corpus() -> Vec<(&'static str, GltfBuilder)> {
     let mut simple = GltfBuilder::new();
     let m = simple.create_box(1.0);
@@ -545,6 +562,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("cameras_orthographic", cameras_orthographic_doc()),
         ("cameras_extras", cameras_extras_doc()),
         ("extensions_everywhere", extensions_everywhere_doc()),
+        ("multi_buffer", multi_buffer_doc()),
     ]
 }
 
@@ -554,16 +572,33 @@ fn corpus_dir() -> PathBuf {
     dir
 }
 
-/// Write every corpus document to `target/corpus/<name>.glb` and return the paths.
+/// GLB with every extra buffer as a data URI (identical to `to_glb_bytes` for one buffer).
+fn corpus_glb(b: &GltfBuilder) -> Vec<u8> {
+    b.to_glb_parts(&ExtraBuffers::DataUri).unwrap().glb
+}
+
+/// Write every corpus document to `target/corpus/<name>.glb` and return the paths. Documents with
+/// several buffers also get an external-files `.gltf` and a GLB with external extra buffers.
 fn write_corpus() -> Vec<PathBuf> {
-    corpus()
-        .into_iter()
-        .map(|(name, b)| {
-            let path = corpus_dir().join(format!("{name}.glb"));
-            b.export_glb(path.to_str().unwrap()).unwrap_or_else(|e| panic!("corpus doc {name}: {e}"));
-            path
-        })
-        .collect()
+    let mut paths = Vec::new();
+    for (name, b) in corpus() {
+        let path = corpus_dir().join(format!("{name}.glb"));
+        std::fs::write(&path, corpus_glb(&b)).unwrap_or_else(|e| panic!("corpus doc {name}: {e}"));
+        paths.push(path);
+        if b.inspect_gltf().buffers.as_ref().is_some_and(|v| v.len() > 1) {
+            let gltf = corpus_dir().join(format!("{name}_external.gltf"));
+            b.export_gltf(&gltf).unwrap_or_else(|e| panic!("corpus doc {name}: {e}"));
+            paths.push(gltf);
+            let parts = b.to_glb_parts(&ExtraBuffers::External { prefix: format!("{name}_glb_") }).unwrap();
+            let glb = corpus_dir().join(format!("{name}_external.glb"));
+            std::fs::write(&glb, &parts.glb).unwrap();
+            for (n, d) in &parts.extra_bins {
+                std::fs::write(corpus_dir().join(n), d).unwrap();
+            }
+            paths.push(glb);
+        }
+    }
+    paths
 }
 
 #[test]
@@ -588,7 +623,7 @@ fn corpus_validates_in_crate_without_errors_or_warnings() {
 fn corpus_reads_back_through_the_independent_gltf_crate() {
     // Representative oracle values derived by hand from the builders above.
     for (name, b) in corpus() {
-        let g = common::parse_glb(&b);
+        let g = gltf::Gltf::from_slice(&corpus_glb(&b)).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(g.document.meshes().count() >= 1, "{name}: no meshes");
         let expected = if name == "scenes_matrix" { 2 } else { 1 };
         assert_eq!(g.document.scenes().count(), expected, "{name}: scene count");
@@ -632,6 +667,11 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
     assert_eq!(g.document.meshes().count(), 7);
     let g = common::parse_glb(&cameras_perspective_doc());
     assert_eq!(g.document.cameras().count(), 2);
+    let (doc, bufs, _) = gltf::import_slice(&corpus_glb(&multi_buffer_doc())).unwrap();
+    assert_eq!(bufs.len(), 3);
+    let tri = doc.meshes().nth(2).unwrap().primitives().next().unwrap();
+    let pos: Vec<_> = tri.reader(|b| Some(&bufs[b.index()].0[..])).read_positions().unwrap().collect();
+    assert_eq!(pos, [[4.0, 0.0, 0.0], [5.0, 0.0, 0.0], [4.0, 1.0, 0.0]]);
     let g = common::parse_glb(&cameras_orthographic_doc());
     assert_eq!(g.document.cameras().next().unwrap().name(), Some("Ortho"));
 }
@@ -639,10 +679,16 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
 #[test]
 fn corpus_is_written_to_target_corpus() {
     let paths = write_corpus();
-    assert_eq!(paths.len(), corpus().len());
+    assert_eq!(paths.len(), corpus().len() + 2); // multi_buffer adds two external variants
     for p in paths {
         let bytes = std::fs::read(&p).unwrap();
-        assert_eq!(&bytes[..4], b"glTF", "{}", p.display());
+        if p.extension().is_some_and(|e| e == "gltf") {
+            serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            // Every external file it names must exist and import.
+            gltf::import(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        } else {
+            assert_eq!(&bytes[..4], b"glTF", "{}", p.display());
+        }
     }
 }
 

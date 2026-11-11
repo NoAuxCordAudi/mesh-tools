@@ -17,6 +17,11 @@
 //! Every message starts with a stable upper-case code (for example `SKIN_JOINT_OUT_OF_RANGE:`)
 //! so callers and tests can match on it.
 //!
+//! Two codes are raised by the exporters rather than by `validate()`, because they depend on how
+//! the buffers are placed: `BUFFER_GLB_EXTRA_UNRESOLVED` (a GLB cannot hold buffers other than 0
+//! without [`to_glb_parts`](GltfBuilder::to_glb_parts)) and `BUFFER_FILE_NAME_COLLISION` (two
+//! buffers would be written to the same file name).
+//!
 //! Warnings never block export.
 
 use crate::builder::GltfBuilder;
@@ -437,9 +442,13 @@ impl<'a> Doc<'a> {
                 r.errors.push("BUFFER_URI_ON_GLB_BUFFER: buffer 0 holds the builder's data and must not have a uri; \
                     choose the encoding at export (BufferEncoding)".to_string());
             } else if i > 0 {
-                // Only buffer 0 can be the GLB BIN chunk; other buffers need a uri.
+                // Only buffer 0 can be the GLB BIN chunk. A buffer with stored bytes gets its uri from the
+                // exporter (ExtraBuffers); one with neither bytes nor a uri can never be exported.
                 match buf.uri.as_deref() {
-                    None => r.errors.push(format!("BUFFER_URI_MISSING: buffer {i} has no uri; only buffer 0 can be the GLB BIN chunk")),
+                    None if stored.get(i).is_some_and(|d| !d.is_empty()) => {}
+                    None => r.errors.push(format!(
+                        "BUFFER_URI_MISSING: buffer {i} has no uri and no stored bytes; only buffer 0 can be the GLB BIN chunk"
+                    )),
                     Some(u) if crate::uri::is_data_uri(u) => match crate::uri::decode_data_uri(u) {
                         Err(e) => r.errors.push(format!("BUFFER_DATA_URI_INVALID: buffer {i}: {e}")),
                         Ok((mime, _)) if mime != "application/octet-stream" && mime != "application/gltf-buffer" => {

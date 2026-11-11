@@ -24,7 +24,9 @@ assert!(b.to_glb_bytes().is_err());
 ## The corpus
 
 `tests/corpus.rs` has `corpus()`: one document per README feature. `cargo test` writes them to
-`target/corpus/*.glb`. Every new feature adds its document there.
+`target/corpus/*.glb`. Every new feature adds its document there. The `multi_buffer` document
+(three buffers) is also written as an external-files `.gltf` and as a GLB with external extra
+buffers, so the Khronos run covers all three encodings of buffers 1 and later.
 
 ## Running the Khronos validator
 
@@ -86,6 +88,9 @@ Documents broken through the public `gltf` field must be rejected by both valida
 | Buffer view past its buffer (per buffer) | `BUFFER_VIEW_RANGE` | `BUFFER_VIEW_TOO_LONG` |
 | Buffer view references a missing buffer | `BUFFER_VIEW_BUFFER_INVALID` | `UNRESOLVED_REFERENCE` |
 | Buffer length differs from its data | `BUFFER_LENGTH_MISMATCH` | `BUFFER_EXTERNAL_BYTE_LENGTH_MISMATCH` / `BUFFER_GLB_CHUNK_TOO_BIG` |
+| Extra buffer with neither `uri` nor stored bytes | `BUFFER_URI_MISSING` | `UNRESOLVED_REFERENCE` / `BUFFER_EXTERNAL_BYTE_LENGTH_MISMATCH` |
+| GLB export of extra buffers without `to_glb_parts` | `BUFFER_GLB_EXTRA_UNRESOLVED` (export error) | none (no document is produced) |
+| Two buffers written to one file name | `BUFFER_FILE_NAME_COLLISION` (export error) | none (no document is produced) |
 | Views into a buffer whose bytes are not held | `BUFFER_DATA_UNVERIFIED` (warning) | none (in-crate only) |
 | Accessor past its buffer view | `ACCESSOR_RANGE` | `ACCESSOR_TOO_LONG` |
 | Scene references a missing node | `SCENE_NODE_INVALID` | `UNRESOLVED_REFERENCE` |

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.22.0
+
+Export of several buffers (N3b). The README Buffers and Buffer Views rows are now Full (the Khronos
+corpus has not been run locally; see the README Validation section). Output of single-buffer
+documents is byte-identical to 0.21.0 (`tests/multi_buffer_export.rs`); `to_gltf_string_embedded`
+and `export_gltf_embedded` of a multi-buffer document embed every buffer.
+
+### Added
+- `ExtraBuffers { External { prefix }, DataUri }`: where buffers 1.. go. External files are named
+  `{prefix}{index}.bin`.
+- `to_gltf_parts_with(&BufferEncoding, &ExtraBuffers)`, `to_glb_parts(&ExtraBuffers)` returning the
+  new `GlbParts { glb, extra_bins }`, and `GltfParts::extra_bins` (`(file name, bytes)` per extra buffer).
+- `export_gltf` writes `<stem>.bin`, `<stem>_<n>.bin` for every extra buffer, then the `.gltf`,
+  each via a `.tmp` file; if a rename fails the `.gltf` is not written and temp files are removed.
+- Export errors `BUFFER_GLB_EXTRA_UNRESOLVED` (`to_glb_bytes` / `export_glb` on a document with
+  buffers other than 0) and `BUFFER_FILE_NAME_COLLISION` (case-insensitive, including hand-set uris
+  and the `.gltf` itself), and `BUFFER_URI_ON_STORED_BUFFER` (buffer 1.. with stored bytes and a
+  hand-set `uri`; the bytes would have been dropped silently).
+- Corpus document `multi_buffer`, also written as external `.gltf` and external-extras GLB.
+
+### Changed
+- `validate()` accepts buffers 1.. that hold stored bytes and no `uri` (the exporter supplies it).
+  `BUFFER_URI_MISSING` now means "no `uri` and no stored bytes". `to_gltf_parts` (without a policy)
+  still rejects such a document with `BUFFER_URI_MISSING`, pointing at `to_gltf_parts_with`.
+
+### Breaking
+- `GltfParts` is `#[non_exhaustive]` and has a new field: struct-literal construction and
+  exhaustive destructuring no longer compile (read the fields you need, or use `..`).
+- `Gltf` and `SkinSet` were already `#[non_exhaustive]` (migration: `..Default::default()` /
+  `SkinSet::new`); this release adds no further break to them.
+- `to_glb_bytes` / `export_glb` fail for documents with extra buffers that hold bytes (they used
+  to fail with `BUFFER_URI_MISSING` from `validate()`).
+
 ## 0.21.0
 
 Multi-buffer storage and validation (N3a). Exporting extra buffers follows in N3b, so a document

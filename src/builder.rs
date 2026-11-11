@@ -339,8 +339,8 @@ impl GltfBuilder {
     /// buffer (initially 0); use [`set_write_buffer`](Self::set_write_buffer) or
     /// [`add_data_view_in_buffer`](Self::add_data_view_in_buffer) to fill it.
     ///
-    /// Buffers other than 0 cannot be the GLB BIN chunk and need a `uri`; exporting them is not
-    /// supported yet and validation reports `BUFFER_URI_MISSING`.
+    /// Buffers other than 0 cannot be the GLB BIN chunk: at export they become external files or
+    /// data URIs, chosen with [`ExtraBuffers`](crate::ExtraBuffers) (see docs/BUFFERS.md).
     ///
     /// # Errors
     ///
@@ -466,10 +466,12 @@ impl GltfBuilder {
     /// # Errors
     ///
     /// `GltfError::InvalidData` listing every validation error (see
-    /// [`validate`](Self::validate)), or if the GLB would exceed the 4 GiB container limit.
-    /// Use [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked) to skip validation.
+    /// [`validate`](Self::validate)), `BUFFER_GLB_EXTRA_UNRESOLVED` if the document has buffers
+    /// other than 0 (use [`to_glb_parts`](Self::to_glb_parts)), or if the GLB would exceed the
+    /// 4 GiB container limit. Use [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked) to skip validation.
     pub fn to_glb_bytes(&self) -> Result<Vec<u8>> {
         self.ensure_valid()?;
+        self.ensure_no_unresolved_extras()?;
         self.to_glb_bytes_unchecked()
     }
 
@@ -488,14 +490,21 @@ impl GltfBuilder {
 
     /// Serialize the document JSON, optionally setting `buffers[0].uri` in the output only.
     pub(crate) fn serialize_json(&self, buffer_uri: Option<&str>) -> Result<String> {
+        self.serialize_json_with_uris(&[buffer_uri.map(str::to_string)])
+    }
+
+    /// Serialize the document JSON, setting `buffers[i].uri` to `uris[i]` (when `Some`) in the output only.
+    pub(crate) fn serialize_json_with_uris(&self, uris: &[Option<String>]) -> Result<String> {
         let mut value = serde_json::to_value(&self.gltf)?;
         if let Some(obj) = value.as_object_mut() {
             obj.retain(|k, v| {
                 k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
             });
         }
-        if let Some(buffer) = buffer_uri.and_then(|u| value.pointer_mut("/buffers/0").map(|b| (b, u))) {
-            buffer.0["uri"] = serde_json::Value::String(buffer.1.to_string());
+        for (i, uri) in uris.iter().enumerate() {
+            if let Some(buffer) = uri.as_ref().and_then(|u| value.pointer_mut(&format!("/buffers/{i}")).map(|b| (b, u))) {
+                buffer.0["uri"] = serde_json::Value::String(buffer.1.clone());
+            }
         }
         crate::builder_accessor::write_integer_bounds_as_integers(&mut value);
         Ok(serde_json::to_string(&value)?)
@@ -507,35 +516,7 @@ impl GltfBuilder {
     /// `extensionsRequired`, which are kept so the problem stays visible. The result may be an invalid
     /// glTF file; this exists for deliberately producing or inspecting such documents.
     pub fn to_glb_bytes_unchecked(&self) -> Result<Vec<u8>> {
-        let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
-
-        let json = self.serialize_json(None)?;
-        let json_pad = (4 - (json.len() % 4)) % 4;
-        let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
-
-        let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + self.buffer_data.first().map_or(0, Vec::len) + 3);
-        out.extend_from_slice(b"glTF");
-        out.write_u32::<LittleEndian>(2)?; // version
-        out.write_u32::<LittleEndian>(0)?; // total length, patched below
-
-        out.write_u32::<LittleEndian>(json_chunk_len)?;
-        out.write_u32::<LittleEndian>(0x4E4F534A)?; // "JSON"
-        out.extend_from_slice(json.as_bytes());
-        out.resize(out.len() + json_pad, 0x20); // pad with spaces
-
-        let bin = self.buffer_data.first().map_or(&[][..], Vec::as_slice);
-        if !bin.is_empty() {
-            let bin_pad = (4 - (bin.len() % 4)) % 4;
-            let bin_chunk_len = u32::try_from(bin.len() + bin_pad).map_err(|_| too_large())?;
-            out.write_u32::<LittleEndian>(bin_chunk_len)?;
-            out.write_u32::<LittleEndian>(0x004E4942)?; // "BIN\0"
-            out.extend_from_slice(bin);
-            out.resize(out.len() + bin_pad, 0);
-        }
-
-        let total = u32::try_from(out.len()).map_err(|_| too_large())?;
-        out[8..12].copy_from_slice(&total.to_le_bytes());
-        Ok(out)
+        glb_container(&self.serialize_json(None)?, self.buffer_data.first().map_or(&[][..], Vec::as_slice))
     }
 
     /// Validate the document and export it as a GLB file.
@@ -750,4 +731,34 @@ impl GltfBuilder {
     pub fn inspect_gltf(&self) -> &Gltf {
         &self.gltf
     }
+}
+
+/// Assemble a GLB container from the JSON text and the BIN chunk (omitted when empty).
+pub(crate) fn glb_container(json: &str, bin: &[u8]) -> Result<Vec<u8>> {
+    let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
+    let json_pad = (4 - (json.len() % 4)) % 4;
+    let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
+
+    let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + bin.len() + 3);
+    out.extend_from_slice(b"glTF");
+    out.write_u32::<LittleEndian>(2)?; // version
+    out.write_u32::<LittleEndian>(0)?; // total length, patched below
+
+    out.write_u32::<LittleEndian>(json_chunk_len)?;
+    out.write_u32::<LittleEndian>(0x4E4F534A)?; // "JSON"
+    out.extend_from_slice(json.as_bytes());
+    out.resize(out.len() + json_pad, 0x20); // pad with spaces
+
+    if !bin.is_empty() {
+        let bin_pad = (4 - (bin.len() % 4)) % 4;
+        let bin_chunk_len = u32::try_from(bin.len() + bin_pad).map_err(|_| too_large())?;
+        out.write_u32::<LittleEndian>(bin_chunk_len)?;
+        out.write_u32::<LittleEndian>(0x004E4942)?; // "BIN\0"
+        out.extend_from_slice(bin);
+        out.resize(out.len() + bin_pad, 0);
+    }
+
+    let total = u32::try_from(out.len()).map_err(|_| too_large())?;
+    out[8..12].copy_from_slice(&total.to_le_bytes());
+    Ok(out)
 }

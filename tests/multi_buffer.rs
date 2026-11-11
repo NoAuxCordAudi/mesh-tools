@@ -149,13 +149,19 @@ fn single_buffer_documents_are_unchanged() {
 // ---- validator ---------------------------------------------------------------------------------
 
 #[test]
-fn extra_buffer_without_a_uri_is_reported_per_buffer() {
+fn extra_buffer_without_uri_or_bytes_is_reported_per_buffer() {
     let mut b = GltfBuilder::new();
     b.add_data_view(&[1; 4], None, None).unwrap();
     b.add_buffer(None).unwrap();
     b.add_data_view_in_buffer(1, &[1; 4], None, None).unwrap();
+    // Stored bytes: the exporter resolves the uri, so this is valid.
+    assert!(b.validate().errors.is_empty());
+    // Hand-added buffer with neither a uri nor stored bytes can never be exported.
+    let mut hand = mesh_tools::Buffer::default();
+    hand.byte_length = 4;
+    b.gltf.buffers.as_mut().unwrap().push(hand);
     let r = b.validate();
-    assert!(r.errors.iter().any(|e| e.starts_with("BUFFER_URI_MISSING") && e.contains("buffer 1")), "{r:#?}");
+    assert!(r.errors.iter().any(|e| e.starts_with("BUFFER_URI_MISSING") && e.contains("buffer 2")), "{r:#?}");
     assert_eq!(r.errors.len(), 1, "{r:#?}");
 }
 

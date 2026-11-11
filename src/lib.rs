@@ -100,7 +100,7 @@ pub mod validate;             // Document validation
 pub use error::{GltfError, Result};
 pub use models::*;
 pub use builder::GltfBuilder;
-pub use builder_export::{BufferEncoding, GltfParts};
+pub use builder_export::{BufferEncoding, ExtraBuffers, GlbParts, GltfParts};
 pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
 pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType, SparseSpec};

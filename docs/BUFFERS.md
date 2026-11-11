@@ -1,7 +1,8 @@
 # Buffers
 
-The builder keeps one binary buffer (buffer 0) in memory. The **encoding** is chosen when you
-export, never stored in the builder, so the same document can be written three ways.
+The builder keeps its binary data in memory in one or more buffers. The **encoding** is chosen when
+you export, never stored in the builder, so the same document can be written several ways. Buffer 0
+is created by the first data write; the sections below start with that single buffer and then add more.
 
 | Encoding | Call | Result |
 |---|---|---|
@@ -56,7 +57,7 @@ assert!(b.add_image_data_uri(None, TextureFormat::JPEG, &png).is_err()); // form
 | Code | Severity | Meaning |
 |---|---|---|
 | `BUFFER_URI_ON_GLB_BUFFER` | error | buffer 0 has a `uri`; the encoding is chosen at export |
-| `BUFFER_URI_MISSING` | error | buffer 1 or later has no `uri` (only buffer 0 can be the BIN chunk) |
+| `BUFFER_URI_MISSING` | error | buffer 1 or later has neither a `uri` nor stored bytes (only buffer 0 can be the BIN chunk) |
 | `BUFFER_URI_INVALID` | error | empty, absolute, backslash, scheme, `..`, or a bad external file name |
 | `BUFFER_DATA_URI_INVALID` | error | not base64, wrong media type, or shorter than `byteLength` |
 | `BUFFER_UNUSED` | warning | no buffer view uses the buffer |
@@ -85,10 +86,56 @@ assert_eq!((views[v].buffer, views[v].byte_offset), (1, 0));
 assert_eq!((views[w].buffer, views[w].byte_offset), (1, 8)); // 5 bytes padded to 8
 ```
 
-Exporting buffers other than 0 is not implemented yet: they have no `uri`, so export fails with
-`BUFFER_URI_MISSING`.
+## Exporting several buffers
+
+Buffer 0 follows the `BufferEncoding` as above. Buffers 1.. follow an `ExtraBuffers` policy:
+
+| Policy | Result |
+|---|---|
+| `ExtraBuffers::External { prefix }` | files `{prefix}{index}.bin`, returned in `extra_bins` |
+| `ExtraBuffers::DataUri` | base64 data URIs inside the JSON, `extra_bins` empty |
+
+```
+use mesh_tools::{BufferEncoding, ExtraBuffers, GltfBuilder};
+let mut b = GltfBuilder::new();
+b.create_box(1.0); // buffer 0
+b.add_buffer(Some("extra".into())).unwrap();
+b.add_data_view_in_buffer(1, &[1, 2, 3, 4], None, None).unwrap();
+assert!(b.validate().is_valid()); // the exporter supplies buffer 1's uri
+
+let enc = BufferEncoding::External { bin_file_name: "m.bin".into() };
+let parts = b.to_gltf_parts_with(&enc, &ExtraBuffers::External { prefix: "m_".into() }).unwrap();
+assert_eq!(parts.extra_bins[0].0, "m_1.bin");
+
+// A GLB keeps buffer 0 as its BIN chunk; extra buffers need a policy.
+assert!(b.to_glb_bytes().unwrap_err().to_string().contains("BUFFER_GLB_EXTRA_UNRESOLVED"));
+let glb = b.to_glb_parts(&ExtraBuffers::DataUri).unwrap();
+assert!(glb.extra_bins.is_empty());
+
+// Colliding names are rejected (compared case-insensitively).
+let clash = BufferEncoding::External { bin_file_name: "M_1.bin".into() };
+let err = b.to_gltf_parts_with(&clash, &ExtraBuffers::External { prefix: "m_".into() }).unwrap_err();
+assert!(err.to_string().contains("BUFFER_FILE_NAME_COLLISION"));
+```
+
+- `to_gltf_parts` (no policy) rejects a document with extra buffers (`BUFFER_URI_MISSING`).
+- `to_gltf_string_embedded` / `export_gltf_embedded` embed every buffer.
+- `export_gltf("dir/m.gltf")` writes `m.bin`, `m_1.bin`, `m_2.bin`, ... and then `m.gltf`. All files
+  go through `.tmp` names; if any rename fails the `.gltf` is not written and the temp files are
+  removed. `.bin` files renamed before the failure stay on disk.
+- A single-buffer document ignores the policy, and its output is unchanged.
+- Buffers that were hand-added with a `uri` and no stored bytes are passed through unchanged.
+
+| Export error | When |
+|---|---|
+| `BUFFER_GLB_EXTRA_UNRESOLVED` | `to_glb_bytes` / `export_glb` with buffers other than 0 holding bytes |
+| `BUFFER_FILE_NAME_COLLISION` | two buffers, a hand-set `uri` or the `.gltf` would share a file name |
+| `BUFFER_URI_ON_STORED_BUFFER` | buffer 1.. holds stored bytes and has a hand-set `uri` (the bytes would not be written) |
+| `BUFFER_URI_INVALID` | a `prefix` or file name that is empty, a path or unsafe |
 
 ## Limits
 
-Only buffer 0 can be exported by the builder. Buffers added by hand through the public
-`gltf` field must carry a valid relative or `data:` URI.
+Buffers added by hand through the public `gltf` field must carry a valid relative or `data:` URI,
+and views into them are only checked against `byteLength` (`BUFFER_DATA_UNVERIFIED`). The builder
+cannot place their bytes because it does not hold them. Do not mix hand-added buffers with
+`add_buffer`: it refuses when `gltf.buffers` and the stored bytes disagree.
