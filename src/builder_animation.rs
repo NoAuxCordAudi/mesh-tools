@@ -1,7 +1,7 @@
 //! # Animation Builder Support
 //!
-//! Keyframe animation for glTF nodes: translation, rotation and scale tracks with
-//! `LINEAR`, `STEP` or `CUBICSPLINE` interpolation.
+//! Keyframe animation for glTF nodes: translation, rotation, scale and morph target weight
+//! tracks with `LINEAR`, `STEP` or `CUBICSPLINE` interpolation.
 //!
 //! Every function that can be given bad input returns a [`Result`] with a message naming
 //! the offending animation, node, keyframe or index; nothing panics. Each call validates
@@ -13,10 +13,15 @@
 //! - The time accessor carries `min`/`max`, as the glTF spec requires for animation input.
 //! - Rotations are normalized (for cubic splines, only the value entries, not tangents).
 //! - Within one animation, each `(node, path)` pair is animated by at most one channel.
-//! - A node with a `matrix` cannot be animated (the spec forbids mixing it with TRS animation).
+//! - A node with a `matrix` cannot have translation, rotation or scale animated (the spec forbids
+//!   mixing them). Weights animation is allowed on such a node.
 //! - `LINEAR`/`STEP` outputs have one element per keyframe; `CUBICSPLINE` outputs have three
 //!   (in-tangent, value, out-tangent) per keyframe and at least two keyframes. Use the
 //!   `add_cubic_*_track` functions, which take [`CubicKeyframe`]s, for the latter.
+//! - Weights tracks (`add_weights_track`, `add_cubic_weights_track`) have one weight per morph
+//!   target in every keyframe. The target count `M` always comes from the animated node's mesh,
+//!   never from the caller: `LINEAR`/`STEP` outputs hold `N * M` values and `CUBICSPLINE`
+//!   outputs `3 * N * M`, laid out per keyframe as `[in-tangents(M), values(M), out-tangents(M)]`.
 //! - Animation data buffer views have no `target`.
 
 use crate::builder::GltfBuilder;
@@ -30,7 +35,7 @@ pub enum AnimationPath {
     Translation,
     Rotation,
     Scale,
-    /// Morph target weights. Not supported yet: channels with this path are rejected.
+    /// Morph target weights. The node must have a mesh with morph targets.
     Weights,
 }
 
@@ -118,6 +123,11 @@ impl GltfBuilder {
     /// input is not a FLOAT `SCALAR` accessor, or the output has the wrong element count
     /// for `interpolation` (`N` for linear/step, `3N` with `N >= 2` for cubic spline).
     ///
+    /// A `SCALAR` output can only drive a `weights` channel, whose per-keyframe width (the morph
+    /// target count `M`) is not known here, so it only needs a positive multiple of `N` (of
+    /// `3N` for cubic spline). The exact `N * M` (`3 * N * M`) count is checked when a `weights`
+    /// channel is added with [`add_animation_channel`](Self::add_animation_channel).
+    ///
     /// # Returns
     ///
     /// The index of the created sampler within the animation
@@ -136,8 +146,14 @@ impl GltfBuilder {
                 "sampler input accessor {input_accessor} must be FLOAT SCALAR keyframe times"
             )));
         }
-        check_output_count(input.count, output.count, interpolation)
-            .map_err(|m| invalid(format!("sampler output accessor {output_accessor}: {m}")))?;
+        // A SCALAR output can only drive a `weights` channel, whose per-keyframe width (the morph
+        // target count) is unknown here; the exact count is checked when a channel is added.
+        let counts = if output.type_ == "SCALAR" {
+            check_scalar_output_count(input.count, output.count, interpolation)
+        } else {
+            check_output_count(input.count, output.count, interpolation)
+        };
+        counts.map_err(|m| invalid(format!("sampler output accessor {output_accessor}: {m}")))?;
         Ok(self.push_sampler(animation_index, input_accessor, output_accessor, interpolation))
     }
 
@@ -146,9 +162,11 @@ impl GltfBuilder {
     /// # Errors
     ///
     /// `GltfError::InvalidInput` if the animation, sampler or node does not exist, the node
-    /// has a `matrix`, `(node, path)` already has a channel in this animation, the sampler's
+    /// has a `matrix` (except for weights), `(node, path)` already has a channel in this animation, the sampler's
     /// output accessor type does not match `target_path`, or `target_path` is
-    /// [`AnimationPath::Weights`] (not supported yet).
+    /// [`AnimationPath::Weights`] and the node has no mesh with morph targets or the sampler's
+    /// output count is not exactly `N * M` (`3 * N * M` for cubic spline) for `N` keyframes and
+    /// `M` morph targets.
     ///
     /// # Returns
     ///
@@ -161,7 +179,8 @@ impl GltfBuilder {
         target_path: AnimationPath,
     ) -> Result<usize> {
         self.check_animation(animation_index)?;
-        // Report the unsupported path before any accessor-type mismatch it would cause.
+        // Report target problems (including an unsupported or impossible path) before any
+        // accessor-type mismatch they would cause.
         self.check_channel_target(animation_index, target_node, target_path)?;
         let sampler = self.gltf.animations.as_ref().unwrap()[animation_index]
             .samplers
@@ -177,6 +196,18 @@ impl GltfBuilder {
                 output.type_,
                 target_path.output_type()
             )));
+        }
+        if target_path == AnimationPath::Weights {
+            let m = self.node_morph_target_count(target_node)?;
+            let input_count = self.accessor_info(sampler.input)?.count;
+            let interpolation = parse_interpolation(sampler.interpolation.as_deref());
+            let expected = expected_output_count(input_count, interpolation, m);
+            if output.count != expected {
+                return Err(invalid(format!(
+                    "sampler {sampler_index} has {} weight values for {input_count} keyframes, but node {target_node}'s mesh has {m} morph targets ({expected} expected)",
+                    output.count
+                )));
+            }
         }
         Ok(self.push_channel(animation_index, sampler_index, target_node, target_path))
     }
@@ -310,6 +341,81 @@ impl GltfBuilder {
         self.add_track(animation_index, node_index, AnimationPath::Scale, times, &flat, keyframes.len(), InterpolationType::CubicSpline)
     }
 
+    /// Animate a node's morph target weights.
+    ///
+    /// `values` holds one row per keyframe, each with one weight per morph target of the node's
+    /// mesh (`LINEAR` or `STEP`). Weights are not clamped: values outside `[0, 1]` are legal. For
+    /// `CUBICSPLINE` use [`add_cubic_weights_track`](Self::add_cubic_weights_track).
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the node has no mesh with morph targets, a row has the wrong
+    /// number of weights (the message names the keyframe and the expected count), a weight is
+    /// non-finite, or any other rule in the module docs is broken. Nothing is added on error.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    pub fn add_weights_track(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        values: &[Vec<f32>],
+        interpolation: InterpolationType,
+    ) -> Result<(usize, usize)> {
+        reject_cubic(interpolation, "add_cubic_weights_track")?;
+        self.check_animation(animation_index)?;
+        let m = self.node_morph_target_count(node_index)?;
+        let mut flat = Vec::with_capacity(values.len() * m);
+        for (k, row) in values.iter().enumerate() {
+            if row.len() != m {
+                return Err(invalid(format!(
+                    "keyframe {k}: {} weights but node {node_index}'s mesh has {m} morph targets", row.len()
+                )));
+            }
+            flat.extend_from_slice(row);
+        }
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, values.len(), m, interpolation)
+    }
+
+    /// Animate a node's morph target weights with cubic-spline keyframes (at least two).
+    ///
+    /// Each keyframe has `in_tangent`, `value` and `out_tangent` vectors with one entry per morph
+    /// target of the node's mesh. They are stored per keyframe as in, value, out.
+    ///
+    /// # Errors
+    ///
+    /// As for [`add_weights_track`](Self::add_weights_track), plus fewer than two keyframes.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    pub fn add_cubic_weights_track(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        keyframes: &[CubicKeyframe<Vec<f32>>],
+    ) -> Result<(usize, usize)> {
+        self.check_animation(animation_index)?;
+        let m = self.node_morph_target_count(node_index)?;
+        let mut flat = Vec::with_capacity(keyframes.len() * m * 3);
+        for (k, kf) in keyframes.iter().enumerate() {
+            for (what, v) in [("in_tangent", &kf.in_tangent), ("value", &kf.value), ("out_tangent", &kf.out_tangent)] {
+                if v.len() != m {
+                    return Err(invalid(format!(
+                        "keyframe {k}: {what} has {} weights but node {node_index}'s mesh has {m} morph targets", v.len()
+                    )));
+                }
+            }
+            flat.extend_from_slice(&kf.in_tangent);
+            flat.extend_from_slice(&kf.value);
+            flat.extend_from_slice(&kf.out_tangent);
+        }
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, keyframes.len(), m, InterpolationType::CubicSpline)
+    }
+
     /// Create translation keyframes for an animation.
     ///
     /// Thin wrapper over [`add_translation_track`](Self::add_translation_track) that takes
@@ -367,6 +473,24 @@ impl GltfBuilder {
         keyframes: usize,
         interpolation: InterpolationType,
     ) -> Result<(usize, usize)> {
+        let width = if path == AnimationPath::Rotation { 4 } else { 3 };
+        self.add_track_with_width(animation_index, node_index, path, times, data, keyframes, width, interpolation)
+    }
+
+    /// Like `add_track`, with an explicit number of floats per keyframe element (3 for
+    /// translation/scale, 4 for rotation, the morph target count for weights).
+    #[allow(clippy::too_many_arguments)]
+    fn add_track_with_width(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        path: AnimationPath,
+        times: &[f32],
+        data: &[f32],
+        keyframes: usize,
+        width: usize,
+        interpolation: InterpolationType,
+    ) -> Result<(usize, usize)> {
         self.check_animation(animation_index)?;
         self.check_channel_target(animation_index, node_index, path)?;
         validate_times(times)?;
@@ -380,11 +504,7 @@ impl GltfBuilder {
         if !plain && times.len() < 2 {
             return Err(invalid("CUBICSPLINE needs at least two keyframes".to_string()));
         }
-        let components = match path.output_type() {
-            "VEC4" => 4,
-            _ => 3,
-        };
-        let expected = keyframes * components * if plain { 1 } else { 3 };
+        let expected = keyframes * width * if plain { 1 } else { 3 };
         if data.len() != expected {
             return Err(invalid(format!(
                 "{path} output has {} floats, expected {expected}",
@@ -397,7 +517,9 @@ impl GltfBuilder {
 
         // ---- validated; write ----
         let input_accessor = self.write_f32_accessor(times, times.len(), "SCALAR", Some(vec![times[0]]), Some(vec![times[times.len() - 1]]));
-        let elements = if plain { keyframes } else { keyframes * 3 };
+        // Accessor element count: VEC3/VEC4 count elements, a weights SCALAR accessor counts floats.
+        let per_keyframe = if path == AnimationPath::Weights { width } else { 1 };
+        let elements = keyframes * per_keyframe * if plain { 1 } else { 3 };
         let output_accessor = self.write_f32_accessor(data, elements, path.output_type(), None, None);
         let sampler = self.push_sampler(animation_index, input_accessor, output_accessor, interpolation);
         let channel = self.push_channel(animation_index, sampler, node_index, path);
@@ -448,19 +570,18 @@ impl GltfBuilder {
 
     /// Node exists, has no `matrix`, path is supported, and `(node, path)` is not already animated.
     fn check_channel_target(&self, animation_index: usize, node: usize, path: AnimationPath) -> Result<()> {
-        if path == AnimationPath::Weights {
-            return Err(invalid(
-                "animating morph target weights is not supported yet".to_string(),
-            ));
-        }
         let nodes = self.gltf.nodes.as_deref().unwrap_or(&[]);
         let n = nodes.get(node).ok_or_else(|| invalid(format!(
             "animation target node {node} does not exist ({} nodes)", nodes.len()
         )))?;
-        if n.matrix.is_some() {
+        // The spec only forbids a matrix together with TRS animation; weights are independent of it.
+        if n.matrix.is_some() && path != AnimationPath::Weights {
             return Err(invalid(format!(
                 "node {node} has a matrix and cannot be animated; use translation/rotation/scale"
             )));
+        }
+        if path == AnimationPath::Weights {
+            self.node_morph_target_count(node)?;
         }
         let duplicate = self.gltf.animations.as_ref().unwrap()[animation_index]
             .channels
@@ -473,6 +594,26 @@ impl GltfBuilder {
             )));
         }
         Ok(())
+    }
+
+    /// Number of morph targets of the node's mesh (shared by all its primitives).
+    fn node_morph_target_count(&self, node: usize) -> Result<usize> {
+        let mesh_index = self
+            .gltf
+            .nodes
+            .as_ref()
+            .and_then(|n| n.get(node))
+            .ok_or_else(|| invalid(format!("animation target node {node} does not exist")))?
+            .mesh
+            .ok_or_else(|| invalid(format!("node {node} has no mesh, so it has no morph targets to animate")))?;
+        let mesh = self
+            .gltf
+            .meshes
+            .as_ref()
+            .and_then(|m| m.get(mesh_index))
+            .ok_or_else(|| invalid(format!("node {node} references mesh {mesh_index}, which does not exist")))?;
+        crate::builder_morph::morph_target_count(&mesh.primitives)
+            .map_err(|e| invalid(format!("node {node}'s mesh {mesh_index} cannot be animated: {e}")))
     }
 
     fn accessor_info(&self, index: usize) -> Result<AccessorInfo> {
@@ -503,6 +644,43 @@ fn check_output_count(input: usize, output: usize, interpolation: InterpolationT
         _ if output != input => Err(format!("expected {input} outputs (one per keyframe), found {output}")),
         _ => Ok(()),
     }
+}
+
+/// For a SCALAR sampler output (weights): the per-keyframe width is unknown, so only require a
+/// positive multiple of the keyframe count (`3 *` for cubic spline). The channel checks it exactly.
+fn check_scalar_output_count(input: usize, output: usize, interpolation: InterpolationType) -> std::result::Result<(), String> {
+    let unit = if interpolation == InterpolationType::CubicSpline { 3 * input } else { input };
+    if interpolation == InterpolationType::CubicSpline && input < 2 {
+        return Err("CUBICSPLINE needs at least two keyframes".to_string());
+    }
+    if unit == 0 || output == 0 || output % unit != 0 {
+        return Err(format!("expected a multiple of {unit} outputs (one weight per morph target per keyframe), found {output}"));
+    }
+    Ok(())
+}
+
+fn parse_interpolation(s: Option<&str>) -> InterpolationType {
+    s.and_then(interpolation_from_str).unwrap_or(InterpolationType::Linear) // glTF default
+}
+
+/// Parse the glTF spelling of an interpolation; `None` for anything else.
+pub(crate) fn interpolation_from_str(s: &str) -> Option<InterpolationType> {
+    match s {
+        "LINEAR" => Some(InterpolationType::Linear),
+        "STEP" => Some(InterpolationType::Step),
+        "CUBICSPLINE" => Some(InterpolationType::CubicSpline),
+        _ => None,
+    }
+}
+
+/// Number of elements a sampler output accessor must have for `keyframes` keyframes.
+///
+/// `width` is 1 for translation, rotation and scale (their accessors count VEC3/VEC4 elements)
+/// and the morph target count for weights (a SCALAR accessor counts floats). Cubic spline
+/// stores three values (in-tangent, value, out-tangent) per keyframe. The builder and the
+/// validator both use this, so they cannot disagree.
+pub(crate) fn expected_output_count(keyframes: usize, interpolation: InterpolationType, width: usize) -> usize {
+    keyframes * width * if interpolation == InterpolationType::CubicSpline { 3 } else { 1 }
 }
 
 /// Plain value tracks can't express cubic-spline tangents; never invent them silently.

@@ -125,7 +125,7 @@ Rules the library enforces (each is an error, never a panic, and a failed call w
 - `CUBICSPLINE` needs `CubicKeyframe { in_tangent, value, out_tangent }` and at least two
   keyframes. Passing plain values with `InterpolationType::CubicSpline` is an error, because
   tangents are never invented for you.
-- Animating `weights` (morph targets) is not supported yet and returns an error.
+- Morph target `weights` tracks (`add_weights_track`, `add_cubic_weights_track`) are covered in [MORPH_TARGETS.md](MORPH_TARGETS.md).
 
 ```rust
 use mesh_tools::{CubicKeyframe, GltfBuilder};
@@ -159,6 +159,7 @@ ones include:
 - `SKIN_NO_COMMON_ROOT`, `SKIN_SKELETON_NOT_ANCESTOR`, `SKIN_SKELETON_INVALID`
 - `SKIN_IBM_INVALID`, `SKIN_IBM_TYPE`, `SKIN_IBM_COUNT`
 - `ANIMATION_EMPTY`, `ANIMATION_CHANNEL_NODE_MATRIX`, `ANIMATION_INPUT_NO_BOUNDS`
+- `ANIMATION_INPUT_TYPE`, `ANIMATION_INTERPOLATION_INVALID`, `ANIMATION_OUTPUT_TYPE`, `ANIMATION_OUTPUT_COUNT`
 
 A skinned node with a non-identity transform is reported as the warning
 `SKINNED_NODE_LOCAL_TRANSFORM`; warnings never block export.
@@ -168,6 +169,6 @@ A skinned node with a non-identity transform is reported as the warning
 - Inverse bind matrices assume each joint's world transform is affine (bottom row `0 0 0 1`),
   built from a node's `matrix` or its translation, rotation and scale. A non-affine `matrix`
   gives a meaningless result. Singular transforms (for example a zero scale) are an error.
-- Normalized `u8`/`u16` weights and morph targets are not supported yet.
+- Normalized `u8`/`u16` weights are not supported yet.
 - The validator checks structure and ranges. It is not a replacement for the Khronos glTF
   Validator, which has not been run against this library's output.

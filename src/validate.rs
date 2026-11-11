@@ -3,7 +3,9 @@
 //! [`GltfBuilder::validate`] checks the document for structural glTF errors that the
 //! individual builder methods cannot see (because the document can also be edited through
 //! the public `gltf` field, and because some rules span several objects): dangling indices,
-//! hierarchy problems, skin consistency and animation targets.
+//! hierarchy problems, skin consistency, morph targets with their default and node weights and
+//! target names, and animation targets, including the output type and element count of every
+//! channel (`weights` channels are checked against the morph target count of the node's mesh).
 //!
 //! Export ([`GltfBuilder::to_glb_bytes`], [`GltfBuilder::export_glb`]) fails with
 //! `GltfError::InvalidData` listing *all* errors. Use
@@ -16,6 +18,7 @@
 //! Warnings never block export.
 
 use crate::builder::GltfBuilder;
+use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
 use crate::models::{Accessor, Mesh, Primitive};
 
 /// Result of [`GltfBuilder::validate`].
@@ -54,6 +57,7 @@ impl GltfBuilder {
         doc.check_buffers(&mut r);
         doc.check_accessors(&mut r);
         doc.check_meshes(&mut r);
+        doc.check_morphs(&mut r);
         let parents = doc.check_hierarchy(&mut r);
         doc.check_scenes(&parents, &mut r);
         doc.check_skins(&parents, &mut r);
@@ -277,6 +281,78 @@ impl<'a> Doc<'a> {
         }
     }
 
+    /// Output accessor type and element count of one channel, judged by that channel's own
+    /// path, target node and sampler interpolation (a sampler shared by several channels is
+    /// checked once per channel).
+    fn check_channel_output(
+        &self,
+        ai: usize,
+        ci: usize,
+        c: &crate::models::AnimationChannel,
+        samplers: &[crate::models::AnimationSampler],
+        r: &mut ValidationReport,
+    ) {
+        let path = c.target.path.as_str();
+        let Some(expected_type) = (match path {
+            "translation" | "scale" => Some("VEC3"),
+            "rotation" => Some("VEC4"),
+            "weights" => Some("SCALAR"),
+            _ => None, // reported as ANIMATION_CHANNEL_PATH_INVALID
+        }) else { return };
+        let at = format!("animation {ai} channel {ci} ({path} of node {})", c.target.node);
+        let Some(sampler) = samplers.get(c.sampler) else { return };
+        let (Some(input), Some(output)) = (self.accessors.get(sampler.input), self.accessors.get(sampler.output)) else { return };
+
+        // Rotation and weights may legally use normalized integer outputs; translation and scale may not.
+        let float = output.component_type == 5126;
+        let normalized_int = matches!(output.component_type, 5120..=5123) && output.normalized == Some(true);
+        let type_ok = output.type_ == expected_type && (float || (normalized_int && matches!(path, "rotation" | "weights")));
+        if !type_ok {
+            r.errors.push(format!(
+                "ANIMATION_OUTPUT_TYPE: {at}: sampler {} output accessor {} is {} with component type {}{}, expected {expected_type} {}",
+                c.sampler,
+                sampler.output,
+                output.type_,
+                output.component_type,
+                if output.normalized == Some(true) { " (normalized)" } else { "" },
+                if matches!(path, "rotation" | "weights") { "FLOAT or normalized integer" } else { "FLOAT" },
+            ));
+            return;
+        }
+
+        let interpolation = sampler.interpolation.as_deref().and_then(interpolation_from_str).unwrap_or(InterpolationType::Linear);
+        if interpolation == InterpolationType::CubicSpline && input.count < 2 {
+            r.errors.push(format!("ANIMATION_OUTPUT_COUNT: {at}: CUBICSPLINE needs at least two keyframes, found {}", input.count));
+        }
+
+        let width = if path == "weights" {
+            let m = self.nodes.get(c.target.node).and_then(|n| n.mesh).and_then(|mi| self.meshes.get(mi)).map_or(0, |mesh| {
+                mesh.primitives.iter().map(|p| p.targets.as_ref().map_or(0, |t| t.len())).find(|&n| n > 0).unwrap_or(0)
+            });
+            // An invalid node is reported as ANIMATION_CHANNEL_NODE_INVALID elsewhere.
+            if m == 0 && self.nodes.get(c.target.node).is_some() {
+                r.errors.push(format!("ANIMATION_CHANNEL_WEIGHTS_NO_MORPHS: {at}: the node has no mesh with morph targets"));
+                return;
+            }
+            m
+        } else {
+            1
+        };
+        if width == 0 {
+            return;
+        }
+        let expected = expected_output_count(input.count, interpolation, width);
+        if output.count != expected {
+            r.errors.push(format!(
+                "ANIMATION_OUTPUT_COUNT: {at}: {} {interpolation} keyframes{} need {expected} output elements but output accessor {} has {}",
+                input.count,
+                if path == "weights" { format!(" and {width} morph targets") } else { String::new() },
+                sampler.output,
+                output.count
+            ));
+        }
+    }
+
     fn check_skinned_nodes(&self, r: &mut ValidationReport) {
         let skins = self.b.gltf.skins.as_deref().unwrap_or(&[]);
         for (ni, node) in self.nodes.iter().enumerate() {
@@ -372,7 +448,17 @@ impl<'a> Doc<'a> {
                         r.errors.push(format!("ANIMATION_SAMPLER_ACCESSOR_INVALID: animation {ai} sampler {si} {what} references accessor {acc}"));
                     }
                 }
+                if let Some(i) = s.interpolation.as_deref() {
+                    if interpolation_from_str(i).is_none() {
+                        r.errors.push(format!("ANIMATION_INTERPOLATION_INVALID: animation {ai} sampler {si} interpolation {i:?} is not LINEAR, STEP or CUBICSPLINE"));
+                    }
+                }
                 if let Some(input) = self.accessors.get(s.input) {
+                    if input.type_ != "SCALAR" || input.component_type != 5126 {
+                        r.errors.push(format!(
+                            "ANIMATION_INPUT_TYPE: animation {ai} sampler {si} input accessor {} must be FLOAT SCALAR keyframe times", s.input
+                        ));
+                    }
                     if input.min.is_none() || input.max.is_none() {
                         r.errors.push(format!("ANIMATION_INPUT_NO_BOUNDS: animation {ai} sampler {si} input accessor {} lacks min/max", s.input));
                     }
@@ -387,12 +473,130 @@ impl<'a> Doc<'a> {
                 }
                 match self.nodes.get(c.target.node) {
                     None => r.errors.push(format!("ANIMATION_CHANNEL_NODE_INVALID: animation {ai} channel {ci} targets node {}", c.target.node)),
-                    Some(n) if n.matrix.is_some() => r.errors.push(format!(
+                    Some(n) if n.matrix.is_some() && c.target.path != "weights" => r.errors.push(format!(
                         "ANIMATION_CHANNEL_NODE_MATRIX: animation {ai} channel {ci} targets node {}, which has a matrix", c.target.node
                     )),
                     _ => {}
                 }
+                self.check_channel_output(ai, ci, c, samplers, r);
             }
+        }
+    }
+}
+
+/// Rough upper bound on vertex attributes a renderer can bind (the WebGL minimum is 16).
+/// Used only for the `MORPH_ATTRIBUTE_BUDGET` warning.
+const ATTRIBUTE_BUDGET: usize = 16;
+
+impl<'a> Doc<'a> {
+    /// Morph targets, default weights, target names and node weights.
+    fn check_morphs(&self, r: &mut ValidationReport) {
+        for (mi, mesh) in self.meshes.iter().enumerate() {
+            let counts: Vec<usize> = mesh.primitives.iter().map(|p| p.targets.as_ref().map_or(0, |t| t.len())).collect();
+            // Number of targets the mesh is expected to have: that of its first primitive with targets.
+            let m = counts.iter().copied().find(|&c| c > 0).unwrap_or(0);
+
+            for (pi, p) in mesh.primitives.iter().enumerate() {
+                let Some(targets) = &p.targets else { continue };
+                if targets.is_empty() {
+                    r.errors.push(format!("MORPH_TARGETS_EMPTY: mesh {mi} primitive {pi} has an empty targets array"));
+                    continue;
+                }
+                if counts[pi] != m && m > 0 {
+                    r.errors.push(format!(
+                        "MORPH_TARGETS_INCONSISTENT: mesh {mi} primitive {pi} has {} morph targets but another primitive has {m}", counts[pi]
+                    ));
+                }
+                let mut budget = p.attributes.len();
+                for (ti, target) in targets.iter().enumerate() {
+                    budget += target.len();
+                    if target.is_empty() {
+                        r.errors.push(format!("MORPH_TARGET_EMPTY: mesh {mi} primitive {pi} target {ti} has no attributes"));
+                    }
+                    for (name, &acc) in target {
+                        self.check_target_attribute(mi, pi, ti, name, acc, p, r);
+                    }
+                }
+                if budget > ATTRIBUTE_BUDGET {
+                    r.warnings.push(format!(
+                        "MORPH_ATTRIBUTE_BUDGET: mesh {mi} primitive {pi} uses {budget} vertex attributes including morph targets; \
+                         many renderers bind at most {ATTRIBUTE_BUDGET}"
+                    ));
+                }
+            }
+
+            if let Some(w) = &mesh.weights {
+                if w.is_empty() {
+                    r.errors.push(format!("MESH_WEIGHTS_EMPTY: mesh {mi} has an empty weights array"));
+                } else if w.len() != m {
+                    r.errors.push(format!("MESH_WEIGHTS_COUNT: mesh {mi} has {} weights but {m} morph targets", w.len()));
+                }
+                if let Some(i) = w.iter().position(|v| !v.is_finite()) {
+                    r.errors.push(format!("MESH_WEIGHTS_NOT_FINITE: mesh {mi} weight {i} is not finite"));
+                }
+            }
+            if let Some(names) = mesh.extras.as_ref().and_then(|e| e.get("targetNames")) {
+                match names.as_array().filter(|a| a.iter().all(|n| n.is_string())) {
+                    None => r.errors.push(format!("MESH_TARGET_NAMES_INVALID: mesh {mi} extras.targetNames must be an array of strings")),
+                    Some(a) => {
+                        if a.len() != m {
+                            r.errors.push(format!("MESH_TARGET_NAMES_COUNT: mesh {mi} has {} target names but {m} morph targets", a.len()));
+                        }
+                        let mut seen = std::collections::HashSet::new();
+                        if let Some(dup) = a.iter().filter_map(|n| n.as_str()).find(|n| !seen.insert(*n)) {
+                            r.warnings.push(format!("MESH_TARGET_NAMES_DUPLICATE: mesh {mi} uses the target name {dup:?} more than once"));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (ni, node) in self.nodes.iter().enumerate() {
+            let Some(w) = &node.weights else { continue };
+            let Some(mesh_index) = node.mesh else {
+                r.errors.push(format!("NODE_WEIGHTS_WITHOUT_MESH: node {ni} has weights but no mesh"));
+                continue;
+            };
+            // A dangling mesh index is reported as NODE_MESH_INVALID elsewhere.
+            let Some(mesh) = self.meshes.get(mesh_index) else { continue };
+            let m = mesh.primitives.iter().map(|p| p.targets.as_ref().map_or(0, |t| t.len())).find(|&c| c > 0).unwrap_or(0);
+            if w.len() != m {
+                r.errors.push(format!("NODE_WEIGHTS_COUNT: node {ni} has {} weights but its mesh {mesh_index} has {m} morph targets", w.len()));
+            }
+            if let Some(i) = w.iter().position(|v| !v.is_finite()) {
+                r.errors.push(format!("NODE_WEIGHTS_NOT_FINITE: node {ni} weight {i} is not finite"));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_target_attribute(&self, mi: usize, pi: usize, ti: usize, name: &str, acc: usize, base: &Primitive, r: &mut ValidationReport) {
+        let at = format!("mesh {mi} primitive {pi} target {ti} {name}");
+        if !matches!(name, "POSITION" | "NORMAL" | "TANGENT") && !name.starts_with('_') {
+            r.errors.push(format!("MORPH_TARGET_ATTRIBUTE_INVALID: {at} is not POSITION, NORMAL, TANGENT or an application-specific `_` attribute"));
+        }
+        let Some(&base_acc) = base.attributes.get(name) else {
+            r.errors.push(format!("MORPH_TARGET_ATTRIBUTE_NOT_IN_BASE: {at}: the primitive has no base {name} attribute"));
+            return;
+        };
+        let Some(a) = self.accessors.get(acc) else {
+            r.errors.push(format!("MORPH_TARGET_ACCESSOR_INVALID: {at} references accessor {acc}"));
+            return;
+        };
+        if matches!(name, "POSITION" | "NORMAL" | "TANGENT") && (a.type_ != "VEC3" || a.component_type != 5126) {
+            r.errors.push(format!(
+                "MORPH_TARGET_TYPE: {at} accessor {acc} must be FLOAT VEC3, found {} with component type {}", a.type_, a.component_type
+            ));
+        }
+        if let Some(b) = self.accessors.get(base_acc) {
+            if a.count != b.count {
+                r.errors.push(format!(
+                    "MORPH_TARGET_COUNT_MISMATCH: {at} accessor {acc} has {} elements but the base {name} accessor {base_acc} has {}", a.count, b.count
+                ));
+            }
+        }
+        if name == "POSITION" && (a.min.is_none() || a.max.is_none()) {
+            r.warnings.push(format!("MORPH_TARGET_POSITION_NO_BOUNDS: {at} accessor {acc} lacks min/max"));
         }
     }
 }

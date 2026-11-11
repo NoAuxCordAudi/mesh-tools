@@ -567,11 +567,12 @@ impl GltfBuilder {
             indices: index_accessor,
             material,
             mode: Some(crate::constants::primitive_mode::TRIANGLES),
+            ..Default::default()
         })
     }
 
     /// Write `bytes` as a new buffer view + accessor and return the accessor index.
-    fn write_attribute(
+    pub(crate) fn write_attribute(
         &mut self,
         bytes: &[u8],
         target: usize,

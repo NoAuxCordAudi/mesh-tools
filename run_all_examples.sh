@@ -17,6 +17,7 @@ EXAMPLES=(
   "instancing_demo"
   "materials_demo"
   "metalness_demo"
+  "morph_demo"
   "normal_mapping_demo"
   "occlusion_mapping_demo"
   "panel_grid_demo"

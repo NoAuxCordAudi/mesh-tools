@@ -10,6 +10,7 @@ A Rust library for creating, manipulating, and exporting 3D meshes with support 
 - Scene hierarchy and node transformation support
 - Export to spec-conformant binary GLB (chunk alignment and padding handled); the document is validated first
 - Skinning and keyframe animation (see [docs/SKINNING.md](docs/SKINNING.md))
+- Morph targets (blend shapes) with weights animation (see [docs/MORPH_TARGETS.md](docs/MORPH_TARGETS.md))
 - Vertex attributes: positions, normals, multiple UV sets, and skinning joints/weights
 - Lightweight math types via mint instead of nalgebra
 
@@ -150,6 +151,7 @@ The library includes several examples demonstrating different features:
 - `hierarchy_demo.rs`: Building scene hierarchies with multiple nodes
 - `animation_demo.rs`: Translation, rotation and scale keyframe animation
 - `skeletal_animation_demo.rs`: A skinned arm that bends (joints, weights, linear and cubic-spline animation)
+- `morph_demo.rs`: A sheet with Bulge and Ripple morph targets and a cubic-spline weights animation; it re-opens its own output and verifies it
 
 More examples live in `examples/` (texture maps, PBR channel demos, terrain, instancing, panel grids, ...).
 
@@ -172,14 +174,14 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | **Core** |||||
 | | Asset Information | ⚠️ Partial | Version 2.0 and generator are set by the builder; `copyright` is in the model but has no setter |
 | | Scenes | ⚠️ Partial | Multiple scenes; the first scene added becomes the default (no API to change it) |
-| | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; the builder never sets `matrix`; no camera or weights |
+| | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; morph target `weights` overrides; the builder never sets `matrix`; no camera |
 | | Buffers | ⚠️ Partial | One embedded buffer exported as the GLB BIN chunk; no external `.bin` or data-URI export |
 | | Buffer Views | ⚠️ Partial | `target` is set by the builder; `byteStride` exists in the model but the builder never writes it (no interleaved attributes) |
 | | Accessors | ⚠️ Partial | Builder emits FLOAT VEC2/3/4, u8/u16/u32 indices and joints, MAT4 inverse bind matrices, and animation data; no sparse or normalized accessors |
 | **Geometry** |||||
-| | Meshes | ⚠️ Partial | Multiple primitives per mesh; no tangent or vertex-color helpers, no mesh weights |
+| | Meshes | ⚠️ Partial | Multiple primitives per mesh; morph targets and default weights; no tangent or vertex-color helpers |
 | | Primitive Types | ⚠️ Partial | Built-in generators emit triangles only; `Primitive.mode` can be set by hand for other modes, with no helpers or validation |
-| | Morph Targets | ❌ None | Not yet implemented |
+| | Morph Targets | ⚠️ Partial | `POSITION` and `NORMAL` deltas, default and per-node weights, target names; no tangent deltas, no sparse accessors |
 | **Materials** |||||
 | | PBR Materials | ✅ Full | Metallic-roughness model: base color, metallic, roughness, emissive, normal and occlusion textures |
 | | Alpha Modes | ✅ Full | Opaque, mask, blend modes |
@@ -190,8 +192,8 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Images | ⚠️ Partial | Embedded PNG/JPEG through a buffer view; external `uri` is in the model but has no builder support |
 | | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets on meshes; specular-glossiness textures use set 0 |
 | **Animation** |||||
-| | Animation | ⚠️ Partial | Translation, rotation and scale tracks with LINEAR, STEP and CUBICSPLINE interpolation; no morph-target weights animation |
-| | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights, no morph targets |
+| | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
+| | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights |
 | **Cameras** |||||
 | | Cameras | ❌ None | Not yet implemented |
 | **Extensions** |||||

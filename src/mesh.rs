@@ -12,6 +12,7 @@
 //! - Texture coordinates (UV mapping)
 //! - Material references
 //! - Joint weights
+//! - Morph targets, default morph weights and target names
 //!
 //! The module also provides helper functions for processing mesh data such as calculating
 //! attribute mappings for glTF primitives.
@@ -33,6 +34,7 @@
 
 use crate::builder::GltfBuilder;
 use crate::error::{GltfError, Result};
+use crate::builder_morph::{validate_targets, validate_weights_and_names, MorphTarget};
 use crate::builder_skin::{JointIndices, SkinSet};
 use crate::models::Primitive;
 use std::collections::HashMap;
@@ -47,6 +49,9 @@ pub struct MeshBuilder {
     joints: Option<Vec<[u16; 4]>>,
     weights: Option<Vec<[f32; 4]>>,
     joint_count: Option<usize>,
+    morph_targets: Option<Vec<MorphTarget>>,
+    default_weights: Option<Vec<f32>>,
+    target_names: Option<Vec<String>>,
     material: Option<usize>,
     name: Option<String>,
 }
@@ -63,6 +68,9 @@ impl MeshBuilder {
             joints: None,
             weights: None,
             joint_count: None,
+            morph_targets: None,
+            default_weights: None,
+            target_names: None,
             material: None,
             name,
         }
@@ -136,30 +144,63 @@ impl MeshBuilder {
         self
     }
 
+    /// Set the morph targets of the mesh (see [`MorphTarget`]).
+    pub fn with_morph_targets(mut self, targets: Vec<MorphTarget>) -> Self {
+        self.morph_targets = Some(targets);
+        self
+    }
+
+    /// Set the default morph target weights (one per target). Requires morph targets.
+    pub fn with_default_weights(mut self, weights: Vec<f32>) -> Self {
+        self.default_weights = Some(weights);
+        self
+    }
+
+    /// Set the morph target names (one per target), written to `mesh.extras.targetNames`.
+    /// Requires morph targets.
+    pub fn with_target_names(mut self, names: Vec<String>) -> Self {
+        self.target_names = Some(names);
+        self
+    }
+
     /// Upload the mesh into `gltf` and return its mesh index.
     ///
     /// All attributes are uploaded: positions (with bounds), optional normals, any number
     /// of texcoord sets (`TEXCOORD_n`), indices (`u16` here; empty means non-indexed
-    /// geometry), and, if set, `JOINTS_0`/`WEIGHTS_0`.
+    /// geometry), and, if set, `JOINTS_0`/`WEIGHTS_0`. Morph targets are written as
+    /// `primitive.targets`, default weights as `mesh.weights` and target names as
+    /// `mesh.extras.targetNames` (see [`GltfBuilder::attach_morph_targets`] and
+    /// [`GltfBuilder::add_morphable_mesh`]).
     ///
     /// If a custom primitive builder was set with
     /// [`with_primitive_builder`](Self::with_primitive_builder), it is called to produce the
-    /// primitive instead, and joints/weights/joint count cannot be combined with it.
+    /// primitive instead, and neither joints/weights/joint count nor morph targets/default
+    /// weights/target names can be combined with it.
     ///
     /// # Errors
     ///
     /// `GltfError::InvalidInput` if joints are set without weights or the reverse, if a
-    /// custom primitive builder is combined with skinning data, or for any validation
-    /// failure documented on
+    /// custom primitive builder is combined with skinning or morph data, if default weights or
+    /// target names are set without morph targets, or for any validation failure documented on
     /// [`GltfBuilder::create_skinned_primitive`](crate::GltfBuilder::create_skinned_primitive)
-    /// (counts, index range, weights). The document is unchanged on error.
+    /// (counts, index range, weights) or [`GltfBuilder::attach_morph_targets`] (target count,
+    /// delta lengths, finite values, no tangent deltas, normal deltas need base normals). The
+    /// default weights and target names must each match the number of morph targets and the
+    /// weights must be finite. All morph data is validated before anything is written, so the
+    /// document is unchanged on error.
     pub fn build_into(self, gltf: &mut GltfBuilder) -> Result<usize> {
         let has_skin_data = self.joints.is_some() || self.weights.is_some() || self.joint_count.is_some();
+        let has_morph_data = self.morph_targets.is_some() || self.default_weights.is_some() || self.target_names.is_some();
 
         if let Some(mut builder_fn) = self.builder {
             if has_skin_data {
                 return Err(GltfError::InvalidInput(
                     "a custom primitive builder cannot be combined with joints, weights or joint count".to_string(),
+                ));
+            }
+            if has_morph_data {
+                return Err(GltfError::InvalidInput(
+                    "a custom primitive builder cannot be combined with morph targets, default weights or target names".to_string(),
                 ));
             }
             let primitive = builder_fn(
@@ -186,9 +227,24 @@ impl MeshBuilder {
             return Err(GltfError::InvalidInput("joint count was set but there are no joints/weights".to_string()));
         }
 
+        // Validate all morph data before writing the base primitive, so a failure leaves the
+        // document unchanged.
+        match &self.morph_targets {
+            Some(targets) => {
+                validate_targets(targets, self.positions.len() / 3, self.normals.is_some())?;
+                validate_weights_and_names(targets.len(), self.default_weights.as_deref(), self.target_names.as_deref())?;
+            }
+            None if self.default_weights.is_some() || self.target_names.is_some() => {
+                return Err(GltfError::InvalidInput(
+                    "default weights or target names were set but there are no morph targets".to_string(),
+                ));
+            }
+            None => {}
+        }
+
         let indices: Vec<u32> = self.indices.iter().map(|&i| u32::from(i)).collect();
         let texcoord_sets: Vec<&[f32]> = self.texcoords.iter().flatten().map(|t| t.as_slice()).collect();
-        let primitive = gltf.create_primitive_checked(
+        let mut primitive = gltf.create_primitive_checked(
             &self.positions,
             if indices.is_empty() { None } else { Some(&indices) },
             self.normals.as_deref(),
@@ -197,7 +253,13 @@ impl MeshBuilder {
             self.joint_count.unwrap_or(u16::MAX as usize + 1),
             self.material,
         )?;
-        Ok(gltf.add_mesh(self.name, vec![primitive]))
+        match self.morph_targets {
+            Some(targets) => {
+                gltf.attach_morph_targets(&mut primitive, &targets)?;
+                gltf.add_morphable_mesh(self.name, vec![primitive], self.default_weights, self.target_names)
+            }
+            None => Ok(gltf.add_mesh(self.name, vec![primitive])),
+        }
     }
 }
 

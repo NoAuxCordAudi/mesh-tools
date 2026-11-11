@@ -198,10 +198,11 @@ fn nodes_with_a_matrix_cannot_be_animated() {
 }
 
 #[test]
-fn weights_path_is_rejected_explicitly() {
+fn weights_channel_on_a_node_without_morph_targets_is_rejected() {
     let (mut b, anim, nodes) = setup(1);
     let (_, sampler) = b.add_translation_track(anim, nodes[0], &[0.0], &[[0.0; 3]], InterpolationType::Linear).unwrap();
-    assert!(err_msg(b.add_animation_channel(anim, sampler, nodes[0], AnimationPath::Weights)).contains("not supported"));
+    let m = err_msg(b.add_animation_channel(anim, sampler, nodes[0], AnimationPath::Weights));
+    assert!(m.contains("no mesh") && m.contains("morph targets"), "{m}");
 }
 
 #[test]

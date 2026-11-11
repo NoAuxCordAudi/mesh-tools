@@ -16,3 +16,5 @@ jobs:
         run: cargo test --all-targets && cargo test --doc
       - name: Skeletal demo exports a valid file
         run: cargo run --example skeletal_animation_demo -- "$RUNNER_TEMP/arm.glb"
+      - name: Morph demo exports and verifies its own output
+        run: cargo run --example morph_demo -- "$RUNNER_TEMP/morph.glb"

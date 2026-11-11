@@ -139,6 +139,7 @@ fn custom_primitive_builder_is_still_honored() {
             indices: None,
             material,
             mode: Some(0),
+            ..Default::default()
         }))
         .with_material(7)
         .build_into(&mut b)

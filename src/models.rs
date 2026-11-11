@@ -120,6 +120,11 @@ pub struct Node {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<usize>>,
+
+    /// Morph target weights for this node's mesh. Overrides `Mesh.weights`.
+    /// Its length must equal the mesh's morph target count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights: Option<Vec<f32>>,
 }
 
 /// Represents a glTF mesh
@@ -129,6 +134,16 @@ pub struct Mesh {
     pub name: Option<String>,
     
     pub primitives: Vec<Primitive>,
+
+    /// Default morph target weights; its length must equal the number of morph targets
+    /// of every primitive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weights: Option<Vec<f32>>,
+
+    /// Application-specific data. By convention `extras.targetNames` holds one name per
+    /// morph target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF mesh primitive
@@ -144,6 +159,11 @@ pub struct Primitive {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<usize>,
+
+    /// Morph targets: one attribute map per target (`POSITION`/`NORMAL`/`TANGENT` deltas
+    /// relative to the base attributes, mapped to accessor indices).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<HashMap<String, usize>>>,
 }
 
 /// Represents a glTF accessor

@@ -138,6 +138,7 @@ impl GltfBuilder {
             rotation: normalized_rotation,
             scale,
             matrix: None,
+            ..Default::default()
         };
         
         let index = if let Some(nodes) = &mut self.gltf.nodes {
@@ -184,6 +185,7 @@ impl GltfBuilder {
             rotation: normalized_rotation,
             scale,
             matrix: None,
+            ..Default::default()
         };
         
         let index = if let Some(nodes) = &mut self.gltf.nodes {
@@ -268,6 +270,7 @@ impl GltfBuilder {
         let mesh = Mesh {
             name,
             primitives,
+            ..Default::default()
         };
         
         if let Some(meshes) = &mut self.gltf.meshes {

@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.6.0
+
+Morph targets (blend shapes) and morph target weights animation.
+
+### Breaking changes
+- `Primitive`, `Mesh` and `Node` gain public fields (`Primitive.targets`, `Mesh.weights`,
+  `Mesh.extras`, `Node.weights`). Code that builds these structs with a struct literal must add
+  `..Default::default()`, and exhaustive destructuring patterns need `..`. The types still
+  derive `Default`. Documents that don't use morph targets serialize exactly as before.
+- Animation channels with the `weights` path are now accepted. This supersedes the 0.5.0 rule
+  that rejected them. `add_animation_channel` with the `weights` path rejects a node without a
+  mesh that has morph targets (all primitives with the same number of targets) and a sampler
+  whose output count is not exactly `N * M` (`3 * N * M` for cubic spline).
+- A node with a `matrix` can now carry a `weights` channel (the spec only forbids a matrix with
+  translation, rotation and scale animation).
+- `add_animation_sampler`: for a SCALAR output, a positive multiple of the keyframe count `N`
+  (of `3N` for cubic spline) is accepted, because the number of morph targets is not known at
+  that level. The exact `N * M` count is checked when a `weights` channel is added.
+- Validation is stricter for **all** animation channels, not only weights. `validate()` and
+  export now also report `ANIMATION_INPUT_TYPE`, `ANIMATION_INTERPOLATION_INVALID`,
+  `ANIMATION_OUTPUT_TYPE` and `ANIMATION_OUTPUT_COUNT` for translation, rotation and scale
+  channels, and a `CUBICSPLINE` sampler with fewer than two keyframes. Documents built through
+  the builder are unaffected; hand-edited documents with such problems now fail to export.
+
+### Added
+- `MorphTarget` (`positions`, `normals`, `tangents` deltas; `#[non_exhaustive]`, built with
+  `MorphTarget::new().with_positions(..)`) and `GltfBuilder::attach_morph_targets`, which works
+  on a primitive before it is added to a mesh, including skinned primitives.
+- `GltfBuilder::add_morphable_mesh` (default weights, target names in
+  `mesh.extras.targetNames`) and `GltfBuilder::set_node_weights`.
+- `MeshBuilder::with_morph_targets`, `with_default_weights` and `with_target_names`.
+  `build_into` validates all morph data before writing anything. Morph data cannot be combined
+  with a custom primitive builder, and default weights or names require morph targets.
+- `add_weights_track` and `add_cubic_weights_track`. The number of targets always comes from
+  the node's mesh.
+- Validator codes for morph targets, mesh and node weights, target names, and weights
+  animation channels: `MORPH_TARGETS_EMPTY`, `MORPH_TARGETS_INCONSISTENT`, `MORPH_TARGET_EMPTY`,
+  `MORPH_TARGET_ACCESSOR_INVALID`, `MORPH_TARGET_ATTRIBUTE_INVALID`,
+  `MORPH_TARGET_ATTRIBUTE_NOT_IN_BASE`, `MORPH_TARGET_TYPE`, `MORPH_TARGET_COUNT_MISMATCH`,
+  `MESH_WEIGHTS_EMPTY`, `MESH_WEIGHTS_COUNT`, `MESH_WEIGHTS_NOT_FINITE`,
+  `MESH_TARGET_NAMES_COUNT`, `MESH_TARGET_NAMES_INVALID`, `NODE_WEIGHTS_WITHOUT_MESH`,
+  `NODE_WEIGHTS_COUNT`, `NODE_WEIGHTS_NOT_FINITE`, `ANIMATION_CHANNEL_WEIGHTS_NO_MORPHS`,
+  `ANIMATION_INPUT_TYPE`, `ANIMATION_INTERPOLATION_INVALID`, `ANIMATION_OUTPUT_TYPE`,
+  `ANIMATION_OUTPUT_COUNT` (these four apply to every animation path); and the warnings
+  `MORPH_TARGET_POSITION_NO_BOUNDS`, `MORPH_ATTRIBUTE_BUDGET` and `MESH_TARGET_NAMES_DUPLICATE`.
+  A non-finite default or node weight is rejected by both the builder and the validator.
+- `docs/MORPH_TARGETS.md` (doctested) and `examples/morph_demo.rs`, which re-opens its own
+  output with the `gltf` crate and verifies it.
+- Tests that read documents back through the `gltf` crate and compare against hand-derived
+  morphing, skinning and animation-sampling values.
+
+### Not supported yet
+- Tangent deltas (the library cannot create base `TANGENT` attributes), sparse accessors,
+  normalized integer delta types, and morph target hooks on the generator shapes
+  (`create_box`, `create_sphere`, ...).
+- Normalized `u8`/`u16` joint weights.
+
 ## 0.5.0
 
 Skinning and skeletal animation are now complete and validated. This release has breaking

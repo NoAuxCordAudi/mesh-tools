@@ -13,6 +13,7 @@
 //! - Support for textures and image data
 //! - Create complex hierarchical scenes with node parent-child relationships
 //! - Skinning and keyframe animation (translation, rotation, scale; linear, step and cubic spline)
+//! - Morph targets (blend shapes) with default weights, target names and weights animation
 //! - Validated export to GLB (single binary file); see [`GltfBuilder::validate`]
 //! - Lightweight math types via the mint crate
 //!
@@ -81,6 +82,7 @@ mod builder_material;         // Implementations for material handling
 mod builder_material_specular; // Implementations for specular material handling
 mod builder_animation;        // Implementations for animation handling
 mod builder_skin;             // Implementations for skin handling
+mod builder_morph;            // Implementations for morph target handling
 pub mod validate;             // Document validation
 
 // Re-exports
@@ -100,9 +102,15 @@ pub use constants::alpha_mode;
 pub use constants::primitive_mode;
 pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
 pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
+pub use builder_morph::MorphTarget;
 
 // Compile and run every Rust code block in docs/SKINNING.md as a doctest, so the guide
 // cannot drift from the API.
 #[cfg(doctest)]
 #[doc = include_str!("../docs/SKINNING.md")]
 struct SkinningGuideDoctests;
+
+// Likewise for docs/MORPH_TARGETS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MORPH_TARGETS.md")]
+struct MorphTargetsGuideDoctests;
