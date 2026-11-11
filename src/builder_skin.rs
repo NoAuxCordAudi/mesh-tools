@@ -7,6 +7,7 @@
 use crate::accessor::{AccessorSpec, AccessorType};
 use crate::builder::GltfBuilder;
 use crate::models::{Primitive, Skin};
+use crate::primitive_spec::{Indices, PrimitiveSpec, TexCoords};
 use crate::error::{GltfError, Result};
 use mint::{ColumnMatrix4};
 
@@ -473,75 +474,14 @@ impl GltfBuilder {
         if skin_sets.is_empty() {
             return Err(invalid("at least one skin set (JOINTS_0/WEIGHTS_0) is required".to_string()));
         }
-        let texcoord_sets: Vec<&[f32]> = texcoords.into_iter().collect();
-        self.create_primitive_checked(positions, indices, normals, &texcoord_sets, skin_sets, joint_count, material)
-    }
-
-    /// Validate, then write, a triangle primitive. `skin_sets` may be empty for an
-    /// unskinned primitive; any number of texcoord sets (`TEXCOORD_n`) is supported.
-    /// Shared by [`create_skinned_primitive`](Self::create_skinned_primitive) and
-    /// `MeshBuilder::build_into`. Validates everything before writing anything.
-    pub(crate) fn create_primitive_checked(
-        &mut self,
-        positions: &[f32],
-        indices: Option<&[u32]>,
-        normals: Option<&[f32]>,
-        texcoord_sets: &[&[f32]],
-        skin_sets: &[SkinSet],
-        joint_count: usize,
-        material: Option<usize>,
-    ) -> Result<Primitive> {
-        use crate::accessor::{AccessorSpec, AccessorType as T, Bounds, BufferViewTarget::{ArrayBuffer, ElementArrayBuffer}};
-        use std::collections::HashMap;
-
-        validate_skinned_geometry(positions, indices, normals, texcoord_sets, skin_sets, joint_count)?;
-
-        // ---- All input is valid; from here on we only write. ----
-        let mut attributes = HashMap::new();
-        let vertex = AccessorSpec::new().with_target(ArrayBuffer);
-
-        attributes.insert(
-            "POSITION".to_string(),
-            self.write_slice(positions, T::Vec3, &vertex.clone().with_bounds(Bounds::Compute)),
-        );
-        if let Some(n) = normals {
-            attributes.insert("NORMAL".to_string(), self.write_slice(n, T::Vec3, &vertex));
-        }
-        for (n, t) in texcoord_sets.iter().enumerate() {
-            attributes.insert(format!("TEXCOORD_{n}"), self.write_slice(t, T::Vec2, &vertex));
-        }
-        for (n, set) in skin_sets.iter().enumerate() {
-            let joints = match &set.joints {
-                JointIndices::U8(j) => {
-                    let flat: Vec<u8> = j.iter().flatten().copied().collect();
-                    self.write_slice(&flat, T::Vec4, &vertex)
-                }
-                JointIndices::U16(j) => {
-                    let flat: Vec<u16> = j.iter().flatten().copied().collect();
-                    self.write_slice(&flat, T::Vec4, &vertex)
-                }
-            };
-            attributes.insert(format!("JOINTS_{n}"), joints);
-            let weights: Vec<f32> = set.weights.iter().flatten().copied().collect();
-            attributes.insert(format!("WEIGHTS_{n}"), self.write_slice(&weights, T::Vec4, &vertex));
-        }
-
-        let index_spec = AccessorSpec::new().with_target(ElementArrayBuffer);
-        let index_accessor = indices.map(|idx| {
-            // 65535 is the primitive-restart value and may not be used as an index.
-            if idx.iter().all(|&i| i < 65535) {
-                let narrow: Vec<u16> = idx.iter().map(|&i| i as u16).collect();
-                self.write_slice(&narrow, T::Scalar, &index_spec)
-            } else {
-                self.write_slice(idx, T::Scalar, &index_spec)
-            }
-        });
-
-        Ok(Primitive {
-            attributes,
-            indices: index_accessor,
+        self.create_primitive(PrimitiveSpec {
+            positions: positions.to_vec(),
+            indices: indices.map(|i| Indices::auto(i.to_vec())),
+            normals: normals.map(<[f32]>::to_vec),
+            texcoords: texcoords.into_iter().map(|t| TexCoords::F32(t.to_vec())).collect(),
+            skin_sets: skin_sets.to_vec(),
+            joint_count: Some(joint_count),
             material,
-            mode: Some(crate::constants::primitive_mode::TRIANGLES),
             ..Default::default()
         })
     }
@@ -587,54 +527,10 @@ fn invalid(msg: String) -> GltfError {
     GltfError::InvalidInput(msg)
 }
 
-/// Validate everything about a skinned primitive without mutating anything.
-/// Returns the vertex count.
-fn validate_skinned_geometry(
-    positions: &[f32],
-    indices: Option<&[u32]>,
-    normals: Option<&[f32]>,
-    texcoord_sets: &[&[f32]],
-    skin_sets: &[SkinSet],
-    joint_count: usize,
-) -> Result<usize> {
-    if positions.is_empty() || positions.len() % 3 != 0 {
-        return Err(invalid(format!(
-            "positions must be a non-empty multiple of 3 floats, got {}", positions.len()
-        )));
-    }
-    if let Some(i) = positions.iter().position(|v| !v.is_finite()) {
-        return Err(invalid(format!("position value {i} is not finite")));
-    }
-    let vertex_count = positions.len() / 3;
-
-    if let Some(n) = normals {
-        if n.len() != positions.len() {
-            return Err(invalid(format!("normals have {} floats, expected {}", n.len(), positions.len())));
-        }
-    }
-    for (n, t) in texcoord_sets.iter().enumerate() {
-        if t.len() != vertex_count * 2 {
-            return Err(invalid(format!("texcoord set {n} has {} floats, expected {}", t.len(), vertex_count * 2)));
-        }
-    }
-
-    match indices {
-        Some(idx) => {
-            if idx.is_empty() || idx.len() % 3 != 0 {
-                return Err(invalid(format!("index count must be a non-empty multiple of 3, got {}", idx.len())));
-            }
-            if let Some((pos, &bad)) = idx.iter().enumerate().find(|(_, &i)| i as usize >= vertex_count) {
-                return Err(invalid(format!("index {pos} is {bad} but there are only {vertex_count} vertices")));
-            }
-        }
-        None if vertex_count % 3 != 0 => {
-            return Err(invalid(format!("non-indexed geometry needs a multiple of 3 vertices, got {vertex_count}")));
-        }
-        None => {}
-    }
-
+/// Validate the skin sets of a primitive with `vertex_count` vertices (without mutating anything).
+pub(crate) fn validate_skin_sets(vertex_count: usize, skin_sets: &[SkinSet], joint_count: usize) -> Result<()> {
     if skin_sets.is_empty() {
-        return Ok(vertex_count); // unskinned primitive: nothing more to check
+        return Ok(()); // unskinned primitive: nothing more to check
     }
     if joint_count == 0 {
         return Err(invalid("joint_count must be at least 1".to_string()));
@@ -679,7 +575,7 @@ fn validate_skinned_geometry(
             )));
         }
     }
-    Ok(vertex_count)
+    Ok(())
 }
 
 /// Normalize each vertex's four weights so they sum to exactly 1.

@@ -184,8 +184,8 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Buffer Views | ⚠️ Partial | `target` and `byteStride`: `add_data_view` for raw views, `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); validated. Single buffer only (`buffer` is always 0) |
 | | Accessors | ✅ Full | Typed writer for every component type (`i8`..`f32`) and accessor type (SCALAR..MAT4, padded columns), `normalized`, computed or explicit `min`/`max` (exact for integers), `byteOffset` into shared views, zero accessors (no `bufferView`) and sparse accessors (`u8`/`u16`/`u32` indices, optional zero base); validated; see docs/ACCESSORS.md. extras/extensions: see the Custom Extensions row |
 | **Geometry** |||||
-| | Meshes | ⚠️ Partial | Multiple primitives per mesh; morph targets and default weights; no tangent or vertex-color helpers |
-| | Primitive Types | ⚠️ Partial | Built-in generators emit triangles only; `Primitive.mode` can be set by hand for other modes, with no helpers or validation |
+| | Meshes | ✅ Full | Multiple primitives per mesh (`add_mesh_checked`), `PrimitiveSpec`/`create_primitive` with positions, normals, tangents, `TEXCOORD_n` (`f32`, normalized `u8`/`u16`), `COLOR_n` (RGB/RGBA, `f32`, normalized `u8`/`u16`), skin sets, `u8`/`u16`/`u32` indices, material, mode and extras; morph targets and default weights; mesh and primitive extras; validated; see docs/MESHES.md. No `KHR_mesh_quantization` attribute types |
+| | Primitive Types | ✅ Full | All seven modes through `PrimitiveMode` and `create_points`/`create_lines`/`create_line_strip`/`create_triangle_strip`/`create_triangle_fan` (or `PrimitiveSpec.mode`), per-mode count rules, `strip_to_triangles`/`fan_to_triangles` helpers; validated; see docs/PRIMITIVE_MODES.md. The built-in shape generators still emit triangles |
 | | Morph Targets | ⚠️ Partial | `POSITION` and `NORMAL` deltas, default and per-node weights, target names; no tangent deltas, no sparse accessors |
 | **Materials** |||||
 | | PBR Materials | ✅ Full | Metallic-roughness model: base color, metallic, roughness, emissive, normal and occlusion textures |

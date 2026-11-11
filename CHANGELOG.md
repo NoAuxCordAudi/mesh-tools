@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.10.0
+
+Meshes and primitive types. The README Meshes and Primitive Types rows are now Full (core
+attribute types only: no `KHR_mesh_quantization`). Output of existing code is byte-identical.
+
+### Added
+- `PrimitiveSpec` and `GltfBuilder::create_primitive`: positions, `u8`/`u16`/`u32` `Indices`,
+  normals, tangents (`VEC4`, `w` = 1 or -1), `TexCoords` (`f32`, normalized `u8`/`u16`), `ColorData`
+  (RGB/RGBA as `f32` or normalized `u8`/`u16`), skin sets, material, mode and extras. Validated up
+  front, so an `Err` leaves the document unchanged. Vertex attribute elements that are not a
+  multiple of 4 bytes (RGB `u8`, `u16` RGB) go into a view with a 4-byte-aligned `byteStride`.
+- `PrimitiveMode` (`code`, `from_code`, `min_count`, `count_multiple`, `is_valid_count`),
+  `Primitive::mode_enum()` (missing mode is triangles), `create_points`, `create_lines`,
+  `create_line_strip(.., closed, ..)`, `create_triangle_strip`, `create_triangle_fan`, and the pure
+  helpers `strip_to_triangles` and `fan_to_triangles`.
+- `GltfBuilder::add_mesh_checked(name, primitives, extras)` for several validated primitives per
+  mesh, `set_mesh_extras` and `set_primitive_extras` (wrappers over `set_extras`).
+- `MeshBuilder::with_tangents`, `with_colors`, `with_mode`, `with_indices_u32`,
+  `with_primitive_extras` and `with_mesh_extras`.
+- Validator codes `PRIMITIVE_MODE_INVALID`, `PRIMITIVE_COUNT_INVALID`,
+  `PRIMITIVE_ATTRIBUTE_NAME_INVALID`, `PRIMITIVE_ATTRIBUTE_TYPE`,
+  `PRIMITIVE_ATTRIBUTE_COUNT_MISMATCH`, `PRIMITIVE_INDEX_OUT_OF_RANGE`, `PRIMITIVE_INDEX_RESTART`
+  and `PRIMITIVE_TANGENT_W_INVALID` (errors); `PRIMITIVE_TANGENT_WITHOUT_NORMAL`,
+  `PRIMITIVE_ATTRIBUTE_SET_GAP`, `PRIMITIVE_NORMAL_NOT_UNIT` (tolerance 0.00674, as in the Khronos
+  validator) and `MESH_PRIMITIVE_NO_POSITION` (warnings). All existing examples and the corpus pass
+  with these enabled; none had to be downgraded. `PRIMITIVE_MODE_NORMALS_IGNORED` (optional in the
+  plan) is not implemented.
+- `docs/MESHES.md` and `docs/PRIMITIVE_MODES.md` (doctested) and a `primitive_modes` corpus document.
+
+### Changed (breaking, pre-1.0)
+- `validate()` rejects hand-built documents that previously exported: invalid modes or counts,
+  unknown attribute names, attribute types that do not fit the semantic, attribute count
+  mismatches, out-of-range or restart index values and tangents with `w` not 1 or -1. Documents made
+  only through the builders are unaffected.
+- `create_primitive` and `create_skinned_primitive` now reject non-finite normals and texcoords and
+  a material that does not exist (previously the validator caught the latter at export).
+- `MeshBuilder::with_primitive_builder` is deprecated (the closure bypasses validation) and cannot
+  be combined with the new tangent, color, mode, `u32` index or primitive extras settings.
+- `MeshBuilder::build_into` adds its mesh through `add_mesh_checked`.
+- Validator messages for the existing `PRIMITIVE_*` codes now read `CODE: mesh M primitive P ...`
+  with a slightly different tail; the codes are unchanged.
+
 ## 0.9.1
 
 Sparse accessors (part 3 of the Accessors / Buffer Views work). The README Accessors row is now

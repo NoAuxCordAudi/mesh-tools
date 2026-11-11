@@ -1,6 +1,6 @@
 [package]
 name = "mesh-tools"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 authors = ["Michael Blazej"]
 description = "A Rust library for generating 3D meshes and exporting them to glTF/GLB files"

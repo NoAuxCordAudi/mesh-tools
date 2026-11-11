@@ -1,3 +1,4 @@
+#![allow(deprecated)] // exercises the deprecated with_primitive_builder
 mod common;
 
 use mesh_tools::mesh::MeshBuilder;

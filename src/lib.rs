@@ -87,6 +87,8 @@ mod builder_animation;        // Implementations for animation handling
 mod builder_skin;             // Implementations for skin handling
 mod builder_morph;            // Implementations for morph target handling
 mod builder_extensions;       // Extensions, extras and asset metadata
+mod builder_mesh;             // Primitive and mesh creation
+mod primitive_spec;           // Primitive modes, specs and helpers
 pub mod validate;             // Document validation
 
 // Re-exports
@@ -110,6 +112,7 @@ pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
 pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
 pub use builder_morph::MorphTarget;
 pub use builder_extensions::ExtensionTarget;
+pub use primitive_spec::{fan_to_triangles, strip_to_triangles, ColorData, Indices, PrimitiveMode, PrimitiveSpec, TexCoords};
 
 // Compile and run every Rust code block in docs/SKINNING.md as a doctest, so the guide
 // cannot drift from the API.
@@ -136,3 +139,13 @@ struct ExtensionsGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/ACCESSORS.md")]
 struct AccessorsGuideDoctests;
+
+// Likewise for docs/MESHES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MESHES.md")]
+struct MeshesGuideDoctests;
+
+// Likewise for docs/PRIMITIVE_MODES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/PRIMITIVE_MODES.md")]
+struct PrimitiveModesGuideDoctests;

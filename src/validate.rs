@@ -24,6 +24,7 @@ use crate::builder_animation::{expected_output_count, interpolation_from_str, In
 use crate::accessor::{component_size, decode_element, element_size, integer_range, type_shape};
 use crate::constants::buffer_view_target;
 use crate::models::{Accessor, Mesh, Primitive};
+use crate::primitive_spec::check_primitive;
 
 /// Result of [`GltfBuilder::validate`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -103,6 +104,9 @@ fn collect_extensions(
         _ => {}
     }
 }
+
+/// Allowed deviation of a normal's length from 1 (the Khronos validator's tolerance).
+const NORMAL_UNIT_TOLERANCE: f64 = 0.00674;
 
 const ANIMATION_PATHS: [&str; 4] = ["translation", "rotation", "scale", "weights"];
 
@@ -618,40 +622,61 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!("MESH_NO_PRIMITIVES: mesh {mi} has no primitives"));
             }
             for (pi, p) in mesh.primitives.iter().enumerate() {
-                for (name, &acc) in &p.attributes {
-                    match self.accessors.get(acc) {
-                        None => r.errors.push(format!("PRIMITIVE_ACCESSOR_INVALID: mesh {mi} primitive {pi} {name} references accessor {acc}")),
-                        Some(a) if name == "POSITION" && (a.min.is_none() || a.max.is_none()) => r.errors.push(format!(
-                            "ACCESSOR_BOUNDS_REQUIRED: mesh {mi} primitive {pi} POSITION accessor {acc} lacks min/max"
-                        )),
-                        _ => {}
+                for issue in check_primitive(p, self.accessors, material_count) {
+                    let list = if issue.warning { &mut r.warnings } else { &mut r.errors };
+                    list.push(format!("{}: mesh {mi} primitive {pi} {}", issue.code, issue.msg));
+                }
+                self.check_primitive_data(mi, pi, p, r);
+            }
+        }
+    }
+
+    /// Checks that need the buffer data: index values, tangent handedness, normal length.
+    /// Unreadable accessors (no view, bad range) and sparse ones (base data only) are skipped; other codes report them.
+    fn check_primitive_data(&self, mi: usize, pi: usize, p: &Primitive, r: &mut ValidationReport) {
+        let vertices = p.attributes.get("POSITION").or_else(|| p.attributes.values().next()).and_then(|&a| self.accessors.get(a)).map(|a| a.count);
+        if let (Some(idx), Some(n)) = (p.indices, vertices) {
+            if let Some((a, elems)) = self.accessor_elements(idx).filter(|(a, _)| a.sparse.is_none() && a.type_ == "SCALAR") {
+                let (restart, width) = match a.component_type {
+                    5121 => (u8::MAX as u64, 1),
+                    5123 => (u16::MAX as u64, 2),
+                    5125 => (u32::MAX as u64, 4),
+                    _ => (0, 0),
+                };
+                let (mut bad_restart, mut bad_range) = (None, None);
+                for (k, e) in elems.enumerate().filter(|_| width > 0) {
+                    let mut le = [0u8; 4];
+                    le[..width].copy_from_slice(&e[..width]);
+                    let v = u32::from_le_bytes(le) as u64;
+                    if v == restart {
+                        bad_restart.get_or_insert((k, v));
+                    } else if v >= n as u64 {
+                        bad_range.get_or_insert((k, v));
                     }
                 }
-                if let Some(idx) = p.indices {
-                    match self.accessors.get(idx) {
-                        None => r.errors.push(format!("PRIMITIVE_INDICES_INVALID: mesh {mi} primitive {pi} references accessor {idx}")),
-                        Some(a) if a.type_ != "SCALAR" || !matches!(a.component_type, 5121 | 5123 | 5125) => r.errors.push(format!(
-                            "PRIMITIVE_INDICES_TYPE: mesh {mi} primitive {pi} indices accessor {idx} must be unsigned SCALAR"
-                        )),
-                        _ => {}
-                    }
+                if let Some((k, v)) = bad_restart {
+                    r.errors.push(format!("PRIMITIVE_INDEX_RESTART: mesh {mi} primitive {pi} index {k} is {v}, the primitive restart value"));
                 }
-                if let Some(m) = p.material {
-                    if m >= material_count {
-                        r.errors.push(format!("PRIMITIVE_MATERIAL_INVALID: mesh {mi} primitive {pi} references material {m} ({material_count} materials)"));
-                    }
+                if let Some((k, v)) = bad_range {
+                    r.errors.push(format!("PRIMITIVE_INDEX_OUT_OF_RANGE: mesh {mi} primitive {pi} index {k} is {v} but there are only {n} vertices"));
                 }
-                for n in joint_sets(p) {
-                    if !p.attributes.contains_key(&format!("WEIGHTS_{n}")) {
-                        r.errors.push(format!("PRIMITIVE_JOINTS_WITHOUT_WEIGHTS: mesh {mi} primitive {pi} has JOINTS_{n} but no WEIGHTS_{n}"));
-                    }
+            }
+        }
+        if let Some(&t) = p.attributes.get("TANGENT") {
+            if let Some(data) = self.read_f32(t).filter(|_| self.accessors[t].type_ == "VEC4" && self.accessors[t].sparse.is_none()) {
+                if let Some(k) = data.chunks_exact(4).position(|c| c[3].abs() != 1.0) {
+                    r.errors.push(format!("PRIMITIVE_TANGENT_W_INVALID: mesh {mi} primitive {pi} tangent {k} has w = {}, expected 1 or -1", data[k * 4 + 3]));
                 }
-                for (name, _) in &p.attributes {
-                    if let Some(n) = name.strip_prefix("WEIGHTS_") {
-                        if !p.attributes.contains_key(&format!("JOINTS_{n}")) {
-                            r.errors.push(format!("PRIMITIVE_WEIGHTS_WITHOUT_JOINTS: mesh {mi} primitive {pi} has {name} but no JOINTS_{n}"));
-                        }
-                    }
+            }
+        }
+        if let Some(&nrm) = p.attributes.get("NORMAL") {
+            if let Some(data) = self.read_f32(nrm).filter(|_| self.accessors[nrm].type_ == "VEC3" && self.accessors[nrm].sparse.is_none()) {
+                let off = data.chunks_exact(3).position(|c| {
+                    let len = c.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
+                    len.is_finite() && (len - 1.0).abs() > NORMAL_UNIT_TOLERANCE
+                });
+                if let Some(k) = off {
+                    r.warnings.push(format!("PRIMITIVE_NORMAL_NOT_UNIT: mesh {mi} primitive {pi} normal {k} is not unit length"));
                 }
             }
         }

@@ -217,6 +217,36 @@ fn sparse_doc() -> GltfBuilder {
     scene_of(b, m)
 }
 
+/// Every primitive mode in one mesh, plus tangents, colors, normalized texcoords and u32 indices.
+fn primitive_modes_doc() -> GltfBuilder {
+    use mesh_tools::{ColorData, Indices, PrimitiveSpec, TexCoords};
+    let mut b = GltfBuilder::new();
+    let sq = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    let rich = b
+        .create_primitive(PrimitiveSpec {
+            positions: sq.to_vec(),
+            indices: Some(Indices::U32(vec![0, 1, 2, 0, 2, 3])),
+            normals: Some([0.0, 0.0, 1.0].repeat(4)),
+            tangents: Some([1.0, 0.0, 0.0, 1.0].repeat(4)),
+            texcoords: vec![TexCoords::U8(vec![0, 0, 255, 0, 255, 255, 0, 255])],
+            colors: vec![ColorData::RgbU8([255, 128, 0].repeat(4)), ColorData::Rgba([1.0, 1.0, 1.0, 0.5].repeat(4))],
+            extras: Some(serde_json::json!({ "kind": "rich" })),
+            ..Default::default()
+        })
+        .unwrap();
+    let prims = vec![
+        rich,
+        b.create_points(&sq, None).unwrap(),
+        b.create_lines(&sq, Some(&[0, 2, 1, 3]), None).unwrap(),
+        b.create_line_strip(&sq, false, None, None).unwrap(),
+        b.create_line_strip(&sq, true, None, None).unwrap(),
+        b.create_triangle_strip(&sq, None, None).unwrap(),
+        b.create_triangle_fan(&sq, None, None).unwrap(),
+    ];
+    let m = b.add_mesh_checked(Some("Modes".into()), prims, Some(serde_json::json!({ "doc": "modes" }))).unwrap();
+    scene_of(b, m)
+}
+
 fn corpus() -> Vec<(&'static str, GltfBuilder)> {
     let mut simple = GltfBuilder::new();
     let m = simple.create_box(1.0);
@@ -235,6 +265,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("morph", morph_doc()),
         ("extensions", extensions_doc()),
         ("sparse", sparse_doc()),
+        ("primitive_modes", primitive_modes_doc()),
     ]
 }
 
