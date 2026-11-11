@@ -20,7 +20,7 @@ fn check_normalized(normalized: bool, component: ComponentType) -> Result<()> {
 }
 
 /// Reject explicit bounds that are malformed or differ from the data's `actual` bounds.
-fn check_explicit(min: &[f64], max: &[f64], comps: usize, component: ComponentType, actual: Option<&(Vec<f64>, Vec<f64>)>) -> Result<()> {
+pub(crate) fn check_explicit(min: &[f64], max: &[f64], comps: usize, component: ComponentType, actual: Option<&(Vec<f64>, Vec<f64>)>) -> Result<()> {
     if min.len() != comps || max.len() != comps {
         return Err(invalid(format!(
             "bounds length is {} (min) / {} (max), expected {comps}, one per component", min.len(), max.len()
@@ -39,6 +39,24 @@ fn check_explicit(min: &[f64], max: &[f64], comps: usize, component: ComponentTy
     }
 }
 
+/// Little-endian bytes of tightly packed `data`, with matrix columns padded to 4 bytes.
+pub(crate) fn encode_elements<C: Component>(data: &[C], ty: AccessorType) -> Vec<u8> {
+    let (cols, rows) = ty.shape();
+    let mut bytes = Vec::with_capacity(data.len() * C::TYPE.size());
+    if cols == 1 {
+        data.iter().for_each(|v| v.push_le(&mut bytes));
+    } else {
+        for column in data.chunks_exact(rows) {
+            let start = bytes.len();
+            column.iter().for_each(|v| v.push_le(&mut bytes));
+            while (bytes.len() - start) % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+    }
+    bytes
+}
+
 impl GltfBuilder {
     /// Append `accessor` and return its index.
     pub(crate) fn push_accessor(&mut self, accessor: Accessor) -> usize {
@@ -51,20 +69,7 @@ impl GltfBuilder {
     /// (with `spec.target`) and the accessor. `data` must hold a whole number of elements.
     pub(crate) fn write_slice<C: Component>(&mut self, data: &[C], ty: AccessorType, spec: &AccessorSpec) -> usize {
         let comps = ty.components();
-        let (cols, rows) = ty.shape();
-        let mut bytes = Vec::with_capacity(data.len() * C::TYPE.size());
-        if cols == 1 {
-            data.iter().for_each(|v| v.push_le(&mut bytes));
-        } else {
-            // Matrix columns are padded to a 4-byte boundary.
-            for column in data.chunks_exact(rows) {
-                let start = bytes.len();
-                column.iter().for_each(|v| v.push_le(&mut bytes));
-                while (bytes.len() - start) % 4 != 0 {
-                    bytes.push(0);
-                }
-            }
-        }
+        let bytes = encode_elements(data, ty);
         let bounds = match &spec.bounds {
             Bounds::None => None,
             Bounds::Compute => bounds_of(data.chunks_exact(comps).map(|e| e.iter().map(|v| v.to_f64()).collect())),

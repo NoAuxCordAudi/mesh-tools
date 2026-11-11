@@ -2,12 +2,17 @@
 
 ## 0.9.0
 
-Typed accessor writer (part 1 of the Accessors / Buffer Views work; no README row becomes Full yet,
-sparse accessors and interleaved views are still to come). Existing output is byte-identical,
+Typed accessor writer and interleaved views (parts 1 and 2 of the Accessors / Buffer Views work; no
+README row becomes Full yet: sparse accessors are still to come, and Buffer Views stays Partial
+because only one buffer is supported). Existing output is byte-identical,
 pinned by golden tests for the primitive, skin, animation and morph writers
 (`tests/accessor_goldens.rs`).
 
 ### Added
+- `InterleavedAttribute` and `GltfBuilder::add_interleaved_attributes`: several attributes in one
+  `ARRAY_BUFFER` view with a `byteStride`. Each element is 4-byte aligned, the stride is rounded up
+  to a multiple of 4, and a stride above 252 is an error. Validated up front, so an `Err` leaves
+  the document unchanged. Read back through the `gltf` crate in `tests/buffer_views.rs`.
 - `ComponentType`, `AccessorType`, `BufferViewTarget`, the sealed `Component` trait (`i8`, `u8`,
   `i16`, `u16`, `u32`, `f32`), `AccessorSpec` and `Bounds` (`None`, `Compute`, `Explicit`).
 - `GltfBuilder::add_accessor_from_slice` (pads MAT2/MAT3 columns from tight input, rejects NaN and

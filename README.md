@@ -181,7 +181,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Scenes | ⚠️ Partial | Multiple scenes; the first scene added becomes the default (no API to change it) |
 | | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; morph target `weights` overrides; the builder never sets `matrix`; no camera |
 | | Buffers | ⚠️ Partial | One embedded buffer (created on first data write) exported as the GLB BIN chunk; no external `.bin` or data-URI export |
-| | Buffer Views | ⚠️ Partial | `target` is set by the builder; `byteStride` exists in the model but the builder never writes it (no interleaved attributes) |
+| | Buffer Views | ⚠️ Partial | `target` and `byteStride`: `add_data_view` for raw views, `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); validated. Single buffer only (`buffer` is always 0) |
 | | Accessors | ⚠️ Partial | Builder emits FLOAT VEC2/3/4, u8/u16/u32 indices and joints, MAT4 inverse bind matrices, and animation data; no sparse or normalized accessors |
 | **Geometry** |||||
 | | Meshes | ⚠️ Partial | Multiple primitives per mesh; morph targets and default weights; no tangent or vertex-color helpers |
