@@ -56,12 +56,13 @@ impl GltfBuilder {
                 .map_err(|e| GltfError::InvalidData(format!("BUFFER_URI_INVALID: {e}")))?;
         }
         self.ensure_valid()?;
-        let has_data = !self.buffer_data.is_empty();
+        // Validation above rejects extra buffers (BUFFER_URI_MISSING), so only buffer 0 is exported.
+        let data = self.buffer_data.first().map_or(&[][..], Vec::as_slice);
         let (buffer_uri, bin) = match encoding {
-            _ if !has_data => (None, Vec::new()),
-            BufferEncoding::Glb => (None, self.buffer_data.clone()),
-            BufferEncoding::DataUri => (Some(uri::encode_data_uri("application/octet-stream", &self.buffer_data)), Vec::new()),
-            BufferEncoding::External { bin_file_name } => (Some(uri::percent_encode(bin_file_name)), self.buffer_data.clone()),
+            _ if data.is_empty() => (None, Vec::new()),
+            BufferEncoding::Glb => (None, data.to_vec()),
+            BufferEncoding::DataUri => (Some(uri::encode_data_uri("application/octet-stream", data)), Vec::new()),
+            BufferEncoding::External { bin_file_name } => (Some(uri::percent_encode(bin_file_name)), data.to_vec()),
         };
         Ok(GltfParts { json: self.serialize_json(buffer_uri.as_deref())?, bin })
     }

@@ -83,7 +83,10 @@ Documents broken through the public `gltf` field must be rejected by both valida
 | Node cycle | `NODE_CYCLE` | `NODE_LOOP` |
 | Node with two parents | `NODE_PARENT_OVERRIDE` | `NODE_PARENT_OVERRIDE` |
 | Matrix together with TRS | `NODE_MATRIX_AND_TRS` | `NODE_MATRIX_TRS` |
-| Buffer view past its buffer | `BUFFER_VIEW_RANGE` | `BUFFER_VIEW_TOO_LONG` |
+| Buffer view past its buffer (per buffer) | `BUFFER_VIEW_RANGE` | `BUFFER_VIEW_TOO_LONG` |
+| Buffer view references a missing buffer | `BUFFER_VIEW_BUFFER_INVALID` | `UNRESOLVED_REFERENCE` |
+| Buffer length differs from its data | `BUFFER_LENGTH_MISMATCH` | `BUFFER_EXTERNAL_BYTE_LENGTH_MISMATCH` / `BUFFER_GLB_CHUNK_TOO_BIG` |
+| Views into a buffer whose bytes are not held | `BUFFER_DATA_UNVERIFIED` (warning) | none (in-crate only) |
 | Accessor past its buffer view | `ACCESSOR_RANGE` | `ACCESSOR_TOO_LONG` |
 | Scene references a missing node | `SCENE_NODE_INVALID` | `UNRESOLVED_REFERENCE` |
 | Primitive references a missing material | `PRIMITIVE_MATERIAL_INVALID` | `UNRESOLVED_REFERENCE` |

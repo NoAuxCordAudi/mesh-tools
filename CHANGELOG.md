@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.21.0
+
+Multi-buffer storage and validation (N3a). Exporting extra buffers follows in N3b, so a document
+with more than one buffer still fails validation (`BUFFER_URI_MISSING`) at export. Single-buffer
+output is byte-identical to 0.20.0 (`tests/multi_buffer.rs`).
+
+### Added
+- `add_buffer`, `set_write_buffer`, `add_data_view_in_buffer`, `buffer_bytes`. Writers append to the
+  current write buffer (initially 0); buffer views record that buffer.
+- Validator `BUFFER_DATA_UNVERIFIED` (warning): a buffer without stored bytes that views reference.
+
+### Changed
+- `BUFFER_LENGTH_MISMATCH` is checked per buffer with stored bytes; `BUFFER_VIEW_RANGE` is checked
+  against the view's own buffer (stored length, else declared `byteLength`);
+  `BUFFER_VIEW_BUFFER_INVALID` now means `buffer >= buffers.len()` (it used to fire for any
+  non-zero buffer). A view with no buffer at all reports it instead of `BUFFER_VIEW_RANGE`.
+- A view into a buffer without stored bytes (hand-added `uri` buffer) is no longer a `BUFFER_VIEW_RANGE`
+  error when it fits the declared `byteLength`; it gets the `BUFFER_DATA_UNVERIFIED` warning instead.
+- Writers re-declare buffers missing from a shrunk `gltf.buffers` instead of panicking.
+- `BUFFER_URI_MISSING` text: only buffer 0 can be the GLB BIN chunk.
+- Every validator and builder reader of stored bytes (images, sparse, accessor bounds, animation
+  data, joints/weights) looks bytes up in the buffer of the view.
+
+### Breaking
+- The `pub(crate)` storage became `Vec<Vec<u8>>`; no public signature changed in this step. The
+  `SkinSet`, `GltfParts` and `Gltf` `#[non_exhaustive]` breaks are recorded with the work that makes them.
+
 ## 0.20.0
 
 Animation. The README Animation row is Full (the Khronos corpus has not been run locally). Output

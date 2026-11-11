@@ -60,10 +60,35 @@ assert!(b.add_image_data_uri(None, TextureFormat::JPEG, &png).is_err()); // form
 | `BUFFER_URI_INVALID` | error | empty, absolute, backslash, scheme, `..`, or a bad external file name |
 | `BUFFER_DATA_URI_INVALID` | error | not base64, wrong media type, or shorter than `byteLength` |
 | `BUFFER_UNUSED` | warning | no buffer view uses the buffer |
+| `BUFFER_DATA_UNVERIFIED` | warning | a buffer without stored bytes is used by views; they are only checked against `byteLength` |
+| `BUFFER_LENGTH_MISMATCH` | error | a buffer's `byteLength` differs from its stored bytes (per buffer) |
+| `BUFFER_VIEW_RANGE` | error | a view does not fit in its own buffer |
+| `BUFFER_VIEW_BUFFER_INVALID` | error | a view's `buffer` is not an existing buffer |
 | `IMAGE_URI_INVALID` | error | external image uri is absolute, has a scheme or backslash, or escapes with `..` |
 | `IMAGE_DATA_URI_INVALID` | error | image data URI malformed or disagreeing with `mimeType` |
 
+## Several buffers in memory
+
+`add_buffer` appends an empty buffer; every writer appends to the current write buffer
+(`set_write_buffer`, initially 0) and `add_data_view_in_buffer` targets one buffer without changing
+it. Offsets are 4-byte aligned per buffer.
+
+```
+use mesh_tools::GltfBuilder;
+let mut b = GltfBuilder::new();
+b.add_buffer(Some("geometry".into())).unwrap();
+b.add_buffer(Some("extra".into())).unwrap();
+let v = b.add_data_view_in_buffer(1, &[1, 2, 3, 4, 5], None, None).unwrap();
+let w = b.add_data_view_in_buffer(1, &[9], None, None).unwrap();
+let views = b.gltf.buffer_views.as_ref().unwrap();
+assert_eq!((views[v].buffer, views[v].byte_offset), (1, 0));
+assert_eq!((views[w].buffer, views[w].byte_offset), (1, 8)); // 5 bytes padded to 8
+```
+
+Exporting buffers other than 0 is not implemented yet: they have no `uri`, so export fails with
+`BUFFER_URI_MISSING`.
+
 ## Limits
 
-Only buffer 0 is written by the builder (single buffer). Buffers added by hand through the public
+Only buffer 0 can be exported by the builder. Buffers added by hand through the public
 `gltf` field must carry a valid relative or `data:` URI.

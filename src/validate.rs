@@ -265,11 +265,10 @@ impl<'a> Doc<'a> {
             if v.byte_stride.is_some() || v.target.is_some() {
                 r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} buffer view {vi} must not define byteStride or target"));
             }
-            // Only buffer 0 has bytes in memory
-            let data = (v.buffer == 0)
-                .then(|| v.byte_offset.checked_add(v.byte_length))
-                .flatten()
-                .and_then(|end| self.b.buffer_data.get(v.byte_offset..end));
+            let data = v
+                .byte_offset
+                .checked_add(v.byte_length)
+                .and_then(|end| self.b.buffer_data.get(v.buffer)?.get(v.byte_offset..end));
             let Some(data) = data else {
                 r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} buffer view {vi} does not lie inside the binary buffer"));
                 continue;
@@ -421,17 +420,17 @@ impl<'a> Doc<'a> {
     }
 
     fn check_buffers(&self, r: &mut ValidationReport) {
-        let data_len = self.b.buffer_data.len();
+        let stored = &self.b.buffer_data;
         let buffers = self.b.gltf.buffers.as_deref().unwrap_or(&[]);
-        if buffers.is_empty() && data_len > 0 {
+        if buffers.is_empty() && stored.iter().any(|d| !d.is_empty()) {
             r.errors.push("BUFFER_MISSING: binary data exists but there is no buffer".to_string());
         }
         for (i, buf) in buffers.iter().enumerate() {
             if buf.byte_length == 0 {
                 r.errors.push(format!("BUFFER_EMPTY: buffer {i} has byteLength 0 (the minimum is 1)"));
-            } else if i == 0 && buf.byte_length != data_len {
+            } else if let Some(d) = stored.get(i).filter(|d| d.len() != buf.byte_length) {
                 r.errors.push(format!(
-                    "BUFFER_LENGTH_MISMATCH: buffer 0 declares {} bytes but {} are stored", buf.byte_length, data_len
+                    "BUFFER_LENGTH_MISMATCH: buffer {i} declares {} bytes but {} are stored", buf.byte_length, d.len()
                 ));
             }
             if i == 0 && buf.uri.is_some() {
@@ -440,7 +439,7 @@ impl<'a> Doc<'a> {
             } else if i > 0 {
                 // Only buffer 0 can be the GLB BIN chunk; other buffers need a uri.
                 match buf.uri.as_deref() {
-                    None => r.errors.push(format!("BUFFER_URI_MISSING: buffer {i} has no uri and no stored data")),
+                    None => r.errors.push(format!("BUFFER_URI_MISSING: buffer {i} has no uri; only buffer 0 can be the GLB BIN chunk")),
                     Some(u) if crate::uri::is_data_uri(u) => match crate::uri::decode_data_uri(u) {
                         Err(e) => r.errors.push(format!("BUFFER_DATA_URI_INVALID: buffer {i}: {e}")),
                         Ok((mime, _)) if mime != "application/octet-stream" && mime != "application/gltf-buffer" => {
@@ -463,18 +462,30 @@ impl<'a> Doc<'a> {
         for i in 0..buffers.len() {
             if !views.iter().any(|v| v.buffer == i) {
                 r.warnings.push(format!("BUFFER_UNUSED: buffer {i} is not referenced by any buffer view"));
+            } else if stored.get(i).is_none() {
+                r.warnings.push(format!(
+                    "BUFFER_DATA_UNVERIFIED: buffer {i} has no stored bytes, so the data of its views is only checked against the declared length"
+                ));
             }
         }
         for (i, v) in self.b.gltf.buffer_views.iter().flatten().enumerate() {
-            if v.buffer != 0 {
-                r.errors.push(format!("BUFFER_VIEW_BUFFER_INVALID: buffer view {i} references buffer {}", v.buffer));
-            }
-            match v.byte_offset.checked_add(v.byte_length) {
-                Some(end) if end <= data_len => {}
-                Some(end) => r.errors.push(format!(
-                    "BUFFER_VIEW_RANGE: buffer view {i} covers bytes {}..{end} but the buffer has {data_len}", v.byte_offset
+            // Capacity: the stored bytes if there are any, else the declared length.
+            let capacity = match buffers.get(v.buffer) {
+                Some(buf) => Some(stored.get(v.buffer).map_or(buf.byte_length, Vec::len)),
+                None => {
+                    r.errors.push(format!(
+                        "BUFFER_VIEW_BUFFER_INVALID: buffer view {i} references buffer {} ({} present)", v.buffer, buffers.len()
+                    ));
+                    None
+                }
+            };
+            match (v.byte_offset.checked_add(v.byte_length), capacity) {
+                (_, None) => {}
+                (Some(end), Some(cap)) if end <= cap => {}
+                (Some(end), Some(cap)) => r.errors.push(format!(
+                    "BUFFER_VIEW_RANGE: buffer view {i} covers bytes {}..{end} but buffer {} has {cap}", v.byte_offset, v.buffer
                 )),
-                None => r.errors.push(format!(
+                (None, _) => r.errors.push(format!(
                     "BUFFER_VIEW_RANGE: buffer view {i} offset {} + length {} overflows", v.byte_offset, v.byte_length
                 )),
             }
@@ -589,11 +600,11 @@ impl<'a> Doc<'a> {
     fn view_bytes(&self, view: usize, offset: usize, len: usize) -> Option<&[u8]> {
         let v = self.b.gltf.buffer_views.as_ref()?.get(view)?;
         let end = offset.checked_add(len)?;
-        if v.buffer != 0 || end > v.byte_length {
+        if end > v.byte_length {
             return None;
         }
         let start = v.byte_offset.checked_add(offset)?;
-        self.b.buffer_data.get(start..start.checked_add(len)?)
+        self.b.buffer_data.get(v.buffer)?.get(start..start.checked_add(len)?)
     }
 
     /// Check `accessor.sparse`; returns whether it is sound enough to read the substituted data.
@@ -1417,7 +1428,7 @@ impl<'a> Doc<'a> {
         if end > view.byte_offset.checked_add(view.byte_length)? {
             return None;
         }
-        let data = self.b.buffer_data.get(start..end)?;
+        let data = self.b.buffer_data.get(view.buffer)?.get(start..end)?;
         Some((a, (0..a.count).map(move |i| &data[i * stride..i * stride + elem])))
     }
 

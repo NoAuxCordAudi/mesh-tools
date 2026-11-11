@@ -374,7 +374,7 @@ mod tests {
     fn zero_width_png_header_is_flagged() {
         let mut b = png_builder();
         let off = b.gltf.buffer_views.as_ref().unwrap()[0].byte_offset;
-        b.buffer_data[off + 16..off + 20].copy_from_slice(&[0, 0, 0, 0]);
+        b.buffer_data[0][off + 16..off + 20].copy_from_slice(&[0, 0, 0, 0]);
         let r = b.validate();
         assert!(r.has_error("IMAGE_DATA_UNDECODABLE") || r.has_error("IMAGE_DIMENSIONS_INVALID"), "{r:?}");
     }
@@ -383,7 +383,7 @@ mod tests {
     fn destroyed_header_is_flagged() {
         let mut b = png_builder();
         let off = b.gltf.buffer_views.as_ref().unwrap()[0].byte_offset;
-        for x in &mut b.buffer_data[off + 8..off + 24] {
+        for x in &mut b.buffer_data[0][off + 8..off + 24] {
             *x = 0xAA;
         }
         assert!(b.validate().has_error("IMAGE_DATA_UNDECODABLE"));

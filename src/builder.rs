@@ -47,7 +47,11 @@ pub struct GltfBuilder {
     #[doc(hidden)]  // Hide from public documentation
     pub gltf: Gltf,
     
-    pub(crate) buffer_data: Vec<u8>,
+    /// Stored bytes per buffer; `buffer_data[i]` belongs to `gltf.buffers[i]`. A buffer past the end
+    /// has no stored bytes (e.g. one pushed directly onto `gltf.buffers` with a `uri`).
+    pub(crate) buffer_data: Vec<Vec<u8>>,
+    /// Buffer that every writer appends to.
+    pub(crate) write_buffer: usize,
     // Track node parent relationships to prevent override errors
     pub(crate) node_parents: Vec<Option<usize>>,
 }
@@ -87,6 +91,7 @@ impl GltfBuilder {
         GltfBuilder {
             gltf,
             buffer_data: Vec::new(),
+            write_buffer: 0,
             node_parents: Vec::new(),
         }
     }
@@ -284,7 +289,7 @@ impl GltfBuilder {
     pub(crate) fn add_buffer_view(&mut self, byte_offset: usize, byte_length: usize, 
                           target: Option<usize>) -> usize {
         let buffer_view = BufferView {
-            buffer: 0, // We only use a single buffer
+            buffer: self.write_buffer,
             byte_offset: byte_offset,
             byte_length: byte_length,
             byte_stride: None,
@@ -302,26 +307,92 @@ impl GltfBuilder {
         }
     }
     
-    /// Add binary data to the buffer and return the byte offset
+    /// Append `data` to the write buffer (4-byte aligned) and return `(byte_offset, byte_length)`.
+    /// Creates buffer 0 on first use; keeps the buffer's declared length in step with its data.
     pub(crate) fn add_buffer_data(&mut self, data: &[u8]) -> (usize, usize) {
-        // Ensure alignment to 4-byte boundary
-        while self.buffer_data.len() % 4 != 0 {
-            self.buffer_data.push(0);
-        }
-        
-        let byte_offset = self.buffer_data.len();
-        let byte_length = data.len();
-        
-        self.buffer_data.extend_from_slice(data);
-        
-        // Create buffer 0 on first use and keep its length in step with the data
         let buffers = self.gltf.buffers.get_or_insert_with(Vec::new);
         if buffers.is_empty() {
             buffers.push(Buffer::default());
         }
-        buffers[0].byte_length = self.buffer_data.len();
-        
-        (byte_offset, byte_length)
+        // `gltf.buffers` is public: if it was shrunk behind our back, declare the missing buffers
+        // again so the write cannot panic; validation then reports the damage.
+        if buffers.len() <= self.write_buffer {
+            buffers.resize_with(self.write_buffer + 1, Buffer::default);
+        }
+        if self.buffer_data.len() <= self.write_buffer {
+            self.buffer_data.resize_with(self.write_buffer + 1, Vec::new);
+        }
+        let store = &mut self.buffer_data[self.write_buffer];
+        store.resize(store.len().next_multiple_of(4), 0);
+        let byte_offset = store.len();
+        store.extend_from_slice(data);
+        buffers[self.write_buffer].byte_length = store.len();
+        (byte_offset, data.len())
+    }
+
+    /// Stored bytes of buffer `index`, or `None` if it does not exist or has no stored bytes.
+    pub fn buffer_bytes(&self, index: usize) -> Option<&[u8]> {
+        self.buffer_data.get(index).map(Vec::as_slice)
+    }
+
+    /// Append an empty buffer and return its index. Writers keep appending to the current write
+    /// buffer (initially 0); use [`set_write_buffer`](Self::set_write_buffer) or
+    /// [`add_data_view_in_buffer`](Self::add_data_view_in_buffer) to fill it.
+    ///
+    /// Buffers other than 0 cannot be the GLB BIN chunk and need a `uri`; exporting them is not
+    /// supported yet and validation reports `BUFFER_URI_MISSING`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if `gltf.buffers` was extended directly so that buffer indices
+    /// no longer line up with the stored bytes. The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert_eq!(b.add_buffer(Some("a".into())).unwrap(), 0);
+    /// assert_eq!(b.add_buffer(None).unwrap(), 1);
+    /// b.add_data_view_in_buffer(1, &[1, 2, 3], None, None).unwrap();
+    /// assert_eq!(b.buffer_bytes(1), Some(&[1u8, 2, 3][..]));
+    /// ```
+    pub fn add_buffer(&mut self, name: Option<String>) -> Result<usize> {
+        let n = self.gltf.buffers.as_ref().map_or(0, Vec::len);
+        if self.buffer_data.len() != n {
+            return Err(GltfError::InvalidInput(format!(
+                "{n} buffers are declared but {} hold stored bytes; buffers added directly to `gltf.buffers` cannot be mixed with add_buffer",
+                self.buffer_data.len()
+            )));
+        }
+        self.gltf.buffers.get_or_insert_with(Vec::new).push(Buffer { name, ..Default::default() });
+        self.buffer_data.push(Vec::new());
+        Ok(n)
+    }
+
+    /// Make `index` the buffer that all following writers (accessors, images, geometry) append to.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the buffer does not exist or has no stored bytes. The write
+    /// buffer is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert!(b.set_write_buffer(0).is_err()); // no buffer yet
+    /// b.add_buffer(None).unwrap();
+    /// b.add_buffer(None).unwrap();
+    /// b.set_write_buffer(1).unwrap();
+    /// b.create_box(1.0);
+    /// assert!(b.buffer_bytes(0).unwrap().is_empty() && !b.buffer_bytes(1).unwrap().is_empty());
+    /// ```
+    pub fn set_write_buffer(&mut self, index: usize) -> Result<()> {
+        if index >= self.buffer_data.len() {
+            return Err(GltfError::InvalidInput(format!(
+                "buffer {index} does not exist or has no stored bytes ({} writable)", self.buffer_data.len()
+            )));
+        }
+        self.write_buffer = index;
+        Ok(())
     }
 
     /// Set or clear the `name` of buffer `index`.
@@ -442,7 +513,7 @@ impl GltfBuilder {
         let json_pad = (4 - (json.len() % 4)) % 4;
         let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
 
-        let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + self.buffer_data.len() + 3);
+        let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + self.buffer_data.first().map_or(0, Vec::len) + 3);
         out.extend_from_slice(b"glTF");
         out.write_u32::<LittleEndian>(2)?; // version
         out.write_u32::<LittleEndian>(0)?; // total length, patched below
@@ -452,12 +523,13 @@ impl GltfBuilder {
         out.extend_from_slice(json.as_bytes());
         out.resize(out.len() + json_pad, 0x20); // pad with spaces
 
-        if !self.buffer_data.is_empty() {
-            let bin_pad = (4 - (self.buffer_data.len() % 4)) % 4;
-            let bin_chunk_len = u32::try_from(self.buffer_data.len() + bin_pad).map_err(|_| too_large())?;
+        let bin = self.buffer_data.first().map_or(&[][..], Vec::as_slice);
+        if !bin.is_empty() {
+            let bin_pad = (4 - (bin.len() % 4)) % 4;
+            let bin_chunk_len = u32::try_from(bin.len() + bin_pad).map_err(|_| too_large())?;
             out.write_u32::<LittleEndian>(bin_chunk_len)?;
             out.write_u32::<LittleEndian>(0x004E4942)?; // "BIN\0"
-            out.extend_from_slice(&self.buffer_data);
+            out.extend_from_slice(bin);
             out.resize(out.len() + bin_pad, 0);
         }
 

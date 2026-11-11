@@ -333,6 +333,37 @@ impl GltfBuilder {
         Ok(view)
     }
 
+    /// Like [`add_data_view`](Self::add_data_view) but appends to buffer `buffer` instead of the
+    /// current write buffer, which is left unchanged.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the buffer does not exist or has no stored bytes, or for the
+    /// same reasons as `add_data_view`. The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// b.add_buffer(None).unwrap();
+    /// b.add_buffer(None).unwrap();
+    /// let v = b.add_data_view_in_buffer(1, &[0u8; 8], None, None).unwrap();
+    /// assert_eq!(b.gltf.buffer_views.as_ref().unwrap()[v].buffer, 1);
+    /// assert!(b.add_data_view_in_buffer(5, &[0u8; 8], None, None).is_err());
+    /// ```
+    pub fn add_data_view_in_buffer(
+        &mut self,
+        buffer: usize,
+        data: &[u8],
+        target: Option<BufferViewTarget>,
+        byte_stride: Option<usize>,
+    ) -> Result<usize> {
+        let previous = self.write_buffer;
+        self.set_write_buffer(buffer)?;
+        let result = self.add_data_view(data, target, byte_stride);
+        self.write_buffer = previous;
+        result
+    }
+
     /// Add an accessor over existing bytes in buffer view `view`.
     ///
     /// `byte_offset` is relative to the start of the view and must be a multiple of the
@@ -394,7 +425,7 @@ impl GltfBuilder {
             return Err(invalid(format!("the view's byte stride {stride} is smaller than the {elem}-byte element")));
         }
         let end = stride.checked_mul(count - 1).and_then(|s| s.checked_add(elem)).and_then(|s| s.checked_add(byte_offset));
-        let end = end.filter(|&e| v.buffer == 0 && e <= v.byte_length).ok_or_else(|| {
+        let end = end.filter(|&e| e <= v.byte_length).ok_or_else(|| {
             invalid(format!(
                 "range: {count} {} elements at offset {byte_offset} do not fit in view {view} ({} bytes)", ty.as_str(), v.byte_length
             ))
@@ -402,8 +433,8 @@ impl GltfBuilder {
         let data = v
             .byte_offset
             .checked_add(end)
-            .and_then(|e| self.buffer_data.get(v.byte_offset + byte_offset..e))
-            .ok_or_else(|| invalid(format!("view {view} extends past the buffer data")))?;
+            .and_then(|e| self.buffer_data.get(v.buffer)?.get(v.byte_offset + byte_offset..e))
+            .ok_or_else(|| invalid(format!("view {view} extends past the stored bytes of buffer {}", v.buffer)))?;
         let elements: Vec<Vec<f64>> = (0..count)
             .map(|i| decode_element(component.code(), ty.as_str(), &data[i * stride..i * stride + elem]).expect("sized above"))
             .collect();
