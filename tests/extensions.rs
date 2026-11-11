@@ -300,6 +300,33 @@ fn extras_are_not_searched_for_extensions() {
     assert!(!b.validate().has_error("EXTENSION_NOT_DECLARED"));
 }
 
+#[test]
+fn extension_payloads_are_opaque_to_the_extension_search() {
+    // a key literally named "extensions" inside another extension's payload is that
+    // extension's own data, not a use of an extension
+    let mut b = rich();
+    b.set_extension(T::Node(0), EXT, json!({ "extensions": { "NOT_AN_EXT": {} }, "list": [{ "extensions": { "ALSO_NOT": {} } }] }))
+        .unwrap();
+    let r = b.validate();
+    assert!(!r.has_error("EXTENSION_NOT_DECLARED"), "{r:?}");
+    assert!(r.is_valid(), "{r:?}");
+    assert!(b.to_glb_bytes().is_ok());
+}
+
+#[test]
+fn spec_gloss_payload_is_still_searched_for_texture_extensions() {
+    // the spec-gloss payload is typed: its texture infos are real glTF objects that can carry extensions
+    let mut b = rich();
+    let sg = mesh_tools::SpecularGlossiness { diffuse_texture: Some(mesh_tools::TextureRef::new(0)), ..Default::default() };
+    let mat = mesh_tools::material::MaterialBuilder::new(None).with_specular_glossiness(sg).try_build().unwrap();
+    let m = b.add_material_from(mat).unwrap();
+    assert!(b.validate().is_valid());
+    let sg = b.gltf.materials.as_mut().unwrap()[m].extensions.as_mut().unwrap().pbr_specular_glossiness.as_mut().unwrap();
+    sg.diffuse_texture.as_mut().unwrap().extensions = Some(serde_json::Map::from_iter([("VENDOR_tex".to_string(), json!({}))]));
+    let r = b.validate();
+    assert!(r.has_error("EXTENSION_NOT_DECLARED"), "{r:?}");
+}
+
 // ---- mesh extras vs morph targetNames ----
 
 fn morph_mesh(b: &mut GltfBuilder, names: Option<Vec<String>>) -> usize {

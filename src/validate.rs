@@ -68,7 +68,9 @@ fn valid_extension_name(n: &str) -> bool {
 }
 
 /// Collect the names under every `extensions` object, reporting non-object payloads.
-/// `path` is only for messages. `extras` values are skipped.
+/// `path` is only for messages. `extras` values are skipped, and so are extension payloads
+/// (opaque vendor data, where a key named `extensions` means nothing to glTF). The one exception
+/// is the typed spec-gloss payload, whose texture infos are glTF objects that can carry extensions.
 fn collect_extensions(
     v: &serde_json::Value,
     path: &str,
@@ -91,11 +93,14 @@ fn collect_extensions(
                                 r.errors.push(format!(
                                     "EXTENSION_VALUE_NOT_OBJECT: {here}.{name} must be a JSON object"
                                 ));
+                            } else if name == crate::builder_extensions::SPEC_GLOSS {
+                                collect_extensions(payload, &format!("{here}.{name}"), found, r);
                             }
                         }
                     }
+                } else {
+                    collect_extensions(child, &here, found, r);
                 }
-                collect_extensions(child, &here, found, r);
             }
         }
         Value::Array(a) => {

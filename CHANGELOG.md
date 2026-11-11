@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.1
+
+### Fixed
+- Validator: a key named `extensions` inside another extension's payload (opaque vendor data) no
+  longer raises a false `EXTENSION_NOT_DECLARED`. Extension payloads are not searched, except the
+  typed `KHR_materials_pbrSpecularGlossiness` payload, whose texture infos can carry extensions.
+  Only validation results change (fewer false errors); written bytes are unchanged.
+
 ## 0.16.0
 
 Scenes and node matrices. The README Scenes row is now Full. Nodes stays Partial (no camera
