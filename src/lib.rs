@@ -113,6 +113,7 @@ pub use constants::primitive_mode;
 pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
 pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
 pub use builder_morph::MorphTarget;
+pub use material::{AlphaMode, TextureRef};
 pub use builder_extensions::ExtensionTarget;
 pub use primitive_spec::{fan_to_triangles, strip_to_triangles, ColorData, Indices, PrimitiveMode, PrimitiveSpec, TexCoords};
 
@@ -151,6 +152,11 @@ struct MeshesGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/PRIMITIVE_MODES.md")]
 struct PrimitiveModesGuideDoctests;
+
+// Likewise for docs/MATERIALS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MATERIALS.md")]
+struct MaterialsGuideDoctests;
 
 // Likewise for docs/TEXTURES.md.
 #[cfg(doctest)]

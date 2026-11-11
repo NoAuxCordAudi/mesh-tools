@@ -130,11 +130,46 @@ impl GltfBuilder {
         doc.check_skinned_nodes(&mut r);
         doc.check_animations(&mut r);
         doc.check_textures(&mut r);
+        doc.check_materials(&mut r);
         r
     }
 }
 
 impl<'a> Doc<'a> {
+    /// Materials (glTF 3.9.x): factor ranges, alpha, texture references, and that every
+    /// primitive using a material has the `TEXCOORD_n` sets its texture slots sample.
+    fn check_materials(&self, r: &mut ValidationReport) {
+        let g = &self.b.gltf;
+        let materials = g.materials.as_deref().unwrap_or(&[]);
+        let textures = g.textures.as_ref().map_or(0, |t| t.len());
+        for (i, m) in materials.iter().enumerate() {
+            for issue in crate::material::check_material(m, Some(textures)) {
+                let list = if issue.warning { &mut r.warnings } else { &mut r.errors };
+                list.push(format!("{}: material {i} {}", issue.code, issue.msg));
+            }
+        }
+        let mut used = vec![false; materials.len()];
+        for (mi, mesh) in self.meshes.iter().enumerate() {
+            for (pi, p) in mesh.primitives.iter().enumerate() {
+                let Some(m) = p.material.and_then(|m| used.get_mut(m).map(|u| (m, u))) else { continue };
+                *m.1 = true;
+                for (slot, _, set) in crate::material::texture_slots(&materials[m.0]) {
+                    if !p.attributes.contains_key(&format!("TEXCOORD_{set}")) {
+                        r.errors.push(format!(
+                            "MATERIAL_TEXCOORD_MISSING: material {} {slot} samples TEXCOORD_{set}, which mesh {mi} primitive {pi} does not have",
+                            m.0
+                        ));
+                    }
+                }
+            }
+        }
+        for (i, u) in used.iter().enumerate() {
+            if !u {
+                r.warnings.push(format!("MATERIAL_UNUSED: material {i} is not used by any primitive"));
+            }
+        }
+    }
+
     /// Samplers, textures and images (glTF 3.7.x): code values, references, image sources and
     /// embedded image headers (header only, pixels are not decoded).
     fn check_textures(&self, r: &mut ValidationReport) {

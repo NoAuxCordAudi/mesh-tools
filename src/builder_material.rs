@@ -91,6 +91,37 @@ impl GltfBuilder {
         }
     }
 
+    /// Add a finished [`Material`](crate::Material) after checking it against the document.
+    ///
+    /// Checks the context-free rules of `MaterialBuilder::try_build` plus that every texture
+    /// slot references an existing texture. The material is not stored on error.
+    ///
+    /// # Errors
+    /// `GltfError::InvalidMaterial` with a `MATERIAL_*` code (for example
+    /// `MATERIAL_TEXTURE_INVALID`). The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::{material::MaterialBuilder, GltfBuilder, GltfError};
+    /// let mut b = GltfBuilder::new();
+    /// // No textures exist yet, so texture 0 is a dangling reference.
+    /// let m = MaterialBuilder::new(None).with_base_color_texture(0).build();
+    /// let err = b.add_material_from(m).unwrap_err();
+    /// assert!(matches!(err, GltfError::InvalidMaterial { code: "MATERIAL_TEXTURE_INVALID", .. }));
+    /// assert_eq!(b.gltf.materials.as_ref().map_or(0, Vec::len), 0);
+    ///
+    /// let ok = b.add_material_from(MaterialBuilder::new(None).with_metallic_factor(0.5).build()).unwrap();
+    /// assert_eq!(ok, 0);
+    /// ```
+    pub fn add_material_from(&mut self, material: crate::models::Material) -> crate::error::Result<usize> {
+        let textures = self.gltf.textures.as_ref().map_or(0, |t| t.len());
+        let index = self.gltf.materials.as_ref().map_or(0, |m| m.len());
+        if let Some(i) = material::check_material(&material, Some(textures)).into_iter().find(|i| !i.warning) {
+            return Err(crate::error::GltfError::InvalidMaterial { index: Some(index), code: i.code, message: i.msg });
+        }
+        self.gltf.materials.get_or_insert_with(Vec::new).push(material);
+        Ok(index)
+    }
+
     /// Create a basic material with the specified color
     pub fn create_basic_material(&mut self, name: Option<String>, color: [f32; 4]) -> usize {
         let material = material::create_basic_material(name, color);

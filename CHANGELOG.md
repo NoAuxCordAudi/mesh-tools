@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.12.0
+
+Materials and texCoord, part 1 (core metallic-roughness). The README PBR Materials row is now Full;
+Texture Coordinates, Material Variations and KHR_materials_pbrSpecularGlossiness stay Partial until
+the specular-glossiness part lands. Output of existing code is byte-identical.
+
+### Added
+- `TextureRef { texture, tex_coord }` (`From<usize>`, `new`, `with_tex_coord`) and the
+  `AlphaMode` enum (`Opaque`, `Mask { cutoff }`, `Blend`).
+- `MaterialBuilder::with_alpha`, `with_extras` and `try_build() -> Result<Material>`.
+- `GltfBuilder::add_material_from(Material) -> Result<usize>`: checks the material and its texture
+  references, leaves the document unchanged on error.
+- `GltfError::InvalidMaterial { index, code, message }`.
+- Validator errors `MATERIAL_TEXTURE_INVALID`, `MATERIAL_FACTOR_RANGE`, `MATERIAL_FACTOR_NOT_FINITE`,
+  `MATERIAL_ALPHA_MODE_INVALID`, `MATERIAL_ALPHA_CUTOFF_INVALID`, `MATERIAL_OCCLUSION_STRENGTH_RANGE`
+  and `MATERIAL_TEXCOORD_MISSING` (per primitive and slot; checked in `validate()` only, because
+  meshes may be added after materials); warnings `MATERIAL_ALPHA_CUTOFF_UNUSED`,
+  `MATERIAL_TEXCOORD_RANGE` (texCoord 2 or higher), `MATERIAL_NORMAL_SCALE_ZERO` (a zero or negative
+  scale stays legal) and `MATERIAL_UNUSED`.
+- `docs/MATERIALS.md` (doctested); a `pbr_slots` corpus document and two material negatives.
+
+### Changed (breaking, pre-1.0)
+- `MaterialBuilder::with_base_color_texture`, `with_metallic_roughness_texture` and
+  `with_emissive_texture` take `impl Into<TextureRef>` instead of `(usize, Option<usize>)`;
+  `with_normal_texture` and `with_occlusion_texture` take `(impl Into<TextureRef>, f32)` for scale
+  and strength instead of `(usize, Option<usize>, Option<f32>)`. A texCoord of 0, a scale of 1 and a
+  strength of 1 are omitted from the JSON.
+- `with_alpha_mode(String, Option<f32>)` is deprecated in favour of `with_alpha(AlphaMode)`.
+- `validate()` (and therefore export) now rejects out-of-range material factors, invalid alpha
+  modes, dangling texture references and primitives that lack a `TEXCOORD_n` their material samples.
+  Documents that only used valid values are unaffected; all shipped examples still export.
+- `add_textured_material` and the specular-glossiness helpers keep their signatures for now (they
+  change in the specular-glossiness part).
+
 ## 0.11.0
 
 Samplers and images. The README Samplers row is now Full. Images stays Partial until `data:` URIs

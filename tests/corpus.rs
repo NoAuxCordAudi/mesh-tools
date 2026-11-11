@@ -118,6 +118,39 @@ fn specular_glossiness_doc() -> GltfBuilder {
     scene_of(b, mesh)
 }
 
+/// Every core material slot, with texCoord 0 and 1, scale/strength and alpha mask.
+fn pbr_slots_doc() -> GltfBuilder {
+    use mesh_tools::{material::MaterialBuilder, AlphaMode, PrimitiveSpec, TexCoords, TextureRef};
+    let mut b = GltfBuilder::new();
+    let t: Vec<usize> = (0..5).map(|_| b.create_uv_test_texture(16, 16).unwrap()).collect();
+    let m = MaterialBuilder::new(Some("Slots".into()))
+        .with_base_color([0.1, 0.2, 0.3, 0.4])
+        .with_metallic_factor(0.6)
+        .with_roughness_factor(0.7)
+        .with_emissive_factor([0.5, 0.25, 0.125])
+        .with_base_color_texture(t[0])
+        .with_metallic_roughness_texture(TextureRef::new(t[1]).with_tex_coord(1))
+        .with_normal_texture(t[2], 0.75)
+        .with_occlusion_texture(TextureRef::new(t[3]).with_tex_coord(1), 0.4)
+        .with_emissive_texture(t[4])
+        .with_alpha(AlphaMode::Mask { cutoff: 0.3 })
+        .try_build()
+        .unwrap();
+    let m = b.add_material_from(m).unwrap();
+    let uv = || TexCoords::F32(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+    let p = b
+        .create_primitive(PrimitiveSpec {
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            normals: Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            texcoords: vec![uv(), TexCoords::U8(vec![0, 0, 255, 0, 0, 255])],
+            material: Some(m),
+            ..Default::default()
+        })
+        .unwrap();
+    let mesh = b.add_mesh_checked(None, vec![p], None).unwrap();
+    scene_of(b, mesh)
+}
+
 fn hierarchy_doc() -> GltfBuilder {
     let mut b = GltfBuilder::new();
     let mesh = b.create_box(0.5);
@@ -258,6 +291,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("materials", materials_doc()),
         ("textured", textured_doc()),
         ("specular_glossiness", specular_glossiness_doc()),
+        ("pbr_slots", pbr_slots_doc()),
         ("hierarchy", hierarchy_doc()),
         ("instancing", instancing_doc()),
         ("animation", animation_doc()),
@@ -538,6 +572,15 @@ fn negatives() -> Vec<Negative> {
     let mut b = boxed();
     b.gltf.meshes.as_mut().unwrap()[0].primitives[0].material = Some(99);
     v.push(Negative { name: "material dangling", doc: b, crate_code: "PRIMITIVE_MATERIAL_INVALID", khronos_code: "UNRESOLVED_REFERENCE" });
+
+    // Khronos codes below are from its message catalogue; not run locally (no binary), CI checks them.
+    let mut b = pbr_slots_doc();
+    b.gltf.materials.as_mut().unwrap()[0].emissive_texture.as_mut().unwrap().index = 99;
+    v.push(Negative { name: "material texture dangling", doc: b, crate_code: "MATERIAL_TEXTURE_INVALID", khronos_code: "UNRESOLVED_REFERENCE" });
+
+    let mut b = pbr_slots_doc();
+    b.gltf.meshes.as_mut().unwrap()[0].primitives[0].attributes.remove("TEXCOORD_1");
+    v.push(Negative { name: "material texcoord missing", doc: b, crate_code: "MATERIAL_TEXCOORD_MISSING", khronos_code: "MESH_PRIMITIVE_TOO_FEW_TEXCOORDS" });
 
     v
 }

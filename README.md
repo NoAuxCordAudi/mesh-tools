@@ -83,6 +83,16 @@ let gold_material = builder.create_metallic_material(
     0.1, // Low roughness factor (shiny)
 );
 
+// Textured material with per-slot texCoord, normal scale and occlusion strength
+// (see docs/MATERIALS.md)
+let brick = builder.add_material_from(
+    mesh_tools::material::MaterialBuilder::new(Some("Brick".to_string()))
+        .with_base_color_texture(albedo_texture)
+        .with_normal_texture(mesh_tools::TextureRef::new(normal_texture).with_tex_coord(1), 0.75)
+        .with_alpha(mesh_tools::AlphaMode::Mask { cutoff: 0.3 })
+        .try_build()?,
+)?;
+
 // Apply material to a mesh
 let sphere_mesh = builder.create_sphere(
     1.0,  // radius
@@ -188,14 +198,14 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Primitive Types | ✅ Full | All seven modes through `PrimitiveMode` and `create_points`/`create_lines`/`create_line_strip`/`create_triangle_strip`/`create_triangle_fan` (or `PrimitiveSpec.mode`), per-mode count rules, `strip_to_triangles`/`fan_to_triangles` helpers; validated; see docs/PRIMITIVE_MODES.md. The built-in shape generators still emit triangles |
 | | Morph Targets | ⚠️ Partial | `POSITION` and `NORMAL` deltas, default and per-node weights, target names; no tangent deltas, no sparse accessors |
 | **Materials** |||||
-| | PBR Materials | ✅ Full | Metallic-roughness model: base color, metallic, roughness, emissive, normal and occlusion textures |
-| | Alpha Modes | ✅ Full | Opaque, mask, blend modes |
+| | PBR Materials | ✅ Full | Metallic-roughness model: all factors and the five texture slots with per-slot `texCoord` (`TextureRef`), normal scale, occlusion strength, `AlphaMode`, extras; `MaterialBuilder::try_build` and `add_material_from` check ranges and texture references; `MATERIAL_*` validation including missing `TEXCOORD_n` on primitives; see docs/MATERIALS.md. Extensions/extras inside texture infos are set through the public model fields |
+| | Alpha Modes | ✅ Full | Opaque, mask (with cutoff), blend modes via `AlphaMode`; invalid modes and cutoffs are rejected |
 | | Double Sided | ✅ Full | Flag for double-sided rendering |
-| | Material Variations | ⚠️ Partial | Metallic-roughness and specular-glossiness (KHR_materials_pbrSpecularGlossiness); texture `texCoord` is fixed to 0 |
+| | Material Variations | ⚠️ Partial | Metallic-roughness (per-slot `texCoord`, scale and strength) and specular-glossiness (KHR_materials_pbrSpecularGlossiness, whose textures still use `texCoord` 0) |
 | **Textures** |||||
 | | Samplers | ✅ Full | Typed `MagFilter`/`MinFilter`/`WrapMode` and `SamplerDesc` (all 108 combinations tested); `add_sampler`, `get_or_add_sampler` (dedup), one shared default sampler; `SAMPLER_*` and `TEXTURE_*` validation |
 | | Images | ⚠️ Partial | Embedded PNG/JPEG (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks) and external `uri` (`add_image_uri`); `data:` URIs are not supported yet, and WebP/KTX2 are out of scope |
-| | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets on meshes; specular-glossiness textures use set 0 |
+| | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per core material slot, missing sets are validated; specular-glossiness textures still use set 0 |
 | **Animation** |||||
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
 | | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights |
