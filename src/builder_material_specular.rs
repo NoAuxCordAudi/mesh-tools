@@ -78,6 +78,7 @@ impl GltfBuilder {
                 index: normal_texture_index,
                 tex_coord: Some(0),
                 scale: Some(1.0),
+                ..Default::default()
             });
         }
         
@@ -86,6 +87,7 @@ impl GltfBuilder {
                 index: occlusion_texture_index,
                 tex_coord: Some(0),
                 strength: Some(1.0),
+                ..Default::default()
             });
         }
         
@@ -93,6 +95,7 @@ impl GltfBuilder {
             material.emissive_texture = Some(TextureInfo {
                 index: emissive_texture_index,
                 tex_coord: Some(0),
+                ..Default::default()
             });
         }
         
@@ -107,6 +110,7 @@ impl GltfBuilder {
             pbr_specular_glossiness.diffuse_texture = Some(TextureInfo {
                 index: diffuse_texture_index,
                 tex_coord: Some(0),
+                ..Default::default()
             });
         }
         
@@ -114,12 +118,14 @@ impl GltfBuilder {
             pbr_specular_glossiness.specular_glossiness_texture = Some(TextureInfo {
                 index: specular_glossiness_texture_index,
                 tex_coord: Some(0),
+                ..Default::default()
             });
         }
         
         // Add extension to material
         let material_extensions = MaterialExtensions {
             pbr_specular_glossiness: Some(pbr_specular_glossiness),
+            ..Default::default()
         };
         
         material.extensions = Some(material_extensions);

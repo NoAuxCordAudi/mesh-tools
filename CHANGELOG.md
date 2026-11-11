@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.0
+
+Model groundwork for extensions/extras (part of the "Custom Extensions" and "Asset Information"
+work). Default output is byte-identical; builder APIs for setting these fields follow.
+
+### Added
+- `extensions: Option<Extensions>` and `extras: Option<serde_json::Value>` on every model struct
+  (`Asset`, `Scene`, `Node`, `Mesh`, `Primitive`, `Accessor`, `BufferView`, `Buffer`, `Material`,
+  `PbrMetallicRoughness`, the texture-info structs, `Texture`, `Image`, `Sampler`, `Skin`,
+  `Animation`, `AnimationChannel`, `AnimationChannelTarget`, `AnimationSampler`,
+  `PbrSpecularGlossiness`). Payloads are opaque JSON.
+- `Extensions` type alias (`serde_json::Map<String, Value>`).
+- `Asset.min_version` (`minVersion`).
+- `MaterialExtensions.other`: flattened map keeping unknown material extensions.
+- `Default` on `Accessor`, `BufferView`, `Buffer`, `Texture` and `Image`.
+
+### Breaking
+- `Gltf.extras` is now `Option<serde_json::Value>` (was `Option<HashMap<String, Value>>`); the
+  spec allows any JSON value.
+- `Gltf.extensions` is now `Option<Extensions>` (was `Option<Value>`).
+- New public fields break struct literals. `Asset`, `Scene`, `Node`, `Primitive`, `Accessor`,
+  `BufferView`, `Buffer`, `Material`, `TextureInfo`, `NormalTextureInfo` and
+  `OcclusionTextureInfo` are now `#[non_exhaustive]`, so they cannot be built with a struct
+  expression outside the crate (not even with `..Default::default()`): create them with
+  `T::default()` and assign fields. Future fields will not break this again. The remaining
+  structs also gained fields, so their literals need `..Default::default()`.
+- `MaterialExtensions` literals need `..Default::default()` (new `other` field).
+
 ## 0.6.1
 
 Validation harness. No library behavior changes.

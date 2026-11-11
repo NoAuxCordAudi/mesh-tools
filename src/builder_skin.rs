@@ -77,6 +77,7 @@ impl GltfBuilder {
             joints,
             inverse_bind_matrices: inverse_bind_matrices_accessor,
             skeleton,
+            ..Default::default()
         };
 
         let skins = self.gltf.skins.get_or_insert_with(Vec::new);

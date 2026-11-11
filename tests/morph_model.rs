@@ -38,18 +38,18 @@ fn json_written_before_the_new_fields_still_deserializes() {
 #[test]
 fn new_fields_use_gltf_key_names_and_round_trip() {
     let target: HashMap<String, usize> = [("POSITION".to_string(), 3), ("NORMAL".to_string(), 4)].into();
-    let primitive = Primitive {
-        attributes: [("POSITION".to_string(), 0)].into(),
-        targets: Some(vec![target.clone(), target]),
-        ..Default::default()
-    };
+    let mut primitive = Primitive::default();
+    primitive.attributes = [("POSITION".to_string(), 0)].into();
+    primitive.targets = Some(vec![target.clone(), target]);
     let mesh = Mesh {
         primitives: vec![primitive],
         weights: Some(vec![0.0, 0.5]),
         extras: Some(serde_json::json!({ "targetNames": ["smile", "blink"] })),
         ..Default::default()
     };
-    let node = Node { mesh: Some(0), weights: Some(vec![1.0, -0.25]), ..Default::default() };
+    let mut node = Node::default();
+    node.mesh = Some(0);
+    node.weights = Some(vec![1.0, -0.25]);
 
     let mj = serde_json::to_value(&mesh).unwrap();
     assert_eq!(mj["weights"], serde_json::json!([0.0, 0.5]));

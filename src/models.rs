@@ -9,6 +9,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Extension payloads keyed by extension name. Payloads are opaque JSON; they are not
+/// interpreted or validated.
+pub type Extensions = serde_json::Map<String, serde_json::Value>;
+
 /// Represents a complete glTF 2.0 document
 ///
 /// A glTF document contains all the resources and metadata needed to represent a 3D scene or model.
@@ -58,7 +62,7 @@ pub struct Gltf {
     pub animations: Option<Vec<Animation>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<serde_json::Value>,
+    pub extensions: Option<Extensions>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "extensionsUsed")]
@@ -69,33 +73,57 @@ pub struct Gltf {
     pub extensions_required: Option<Vec<String>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub extras: Option<HashMap<String, serde_json::Value>>,
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents the glTF asset information
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Asset {
     pub version: String,
+
+    /// Minimum glTF version a loader must support (`major.minor`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "minVersion")]
+    pub min_version: Option<String>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generator: Option<String>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub copyright: Option<String>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF scene
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Scene {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nodes: Option<Vec<usize>>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF node
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -125,6 +153,14 @@ pub struct Node {
     /// Its length must equal the mesh's morph target count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weights: Option<Vec<f32>>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF mesh
@@ -144,10 +180,15 @@ pub struct Mesh {
     /// morph target.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extras: Option<serde_json::Value>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
 }
 
 /// Represents a glTF mesh primitive
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Primitive {
     pub attributes: HashMap<String, usize>,
     
@@ -164,10 +205,19 @@ pub struct Primitive {
     /// relative to the base attributes, mapped to accessor indices).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub targets: Option<Vec<HashMap<String, usize>>>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF accessor
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Accessor {
     #[serde(rename = "bufferView")]
     pub buffer_view: usize,
@@ -189,10 +239,19 @@ pub struct Accessor {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<bool>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF buffer view
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct BufferView {
     pub buffer: usize,
     #[serde(rename = "byteOffset")]
@@ -206,20 +265,38 @@ pub struct BufferView {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF buffer
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Buffer {
     #[serde(rename = "byteLength")]
     pub byte_length: usize,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF material
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Material {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -258,6 +335,10 @@ pub struct Material {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<MaterialExtensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF PBR material
@@ -282,20 +363,38 @@ pub struct PbrMetallicRoughness {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "metallicRoughnessTexture")]
     pub metallic_roughness_texture: Option<TextureInfo>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents basic texture reference information
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct TextureInfo {
     pub index: usize,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "texCoord")]
     pub tex_coord: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents normal texture reference information
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct NormalTextureInfo {
     pub index: usize,
     
@@ -305,10 +404,19 @@ pub struct NormalTextureInfo {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents occlusion texture reference information
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct OcclusionTextureInfo {
     pub index: usize,
     
@@ -318,10 +426,18 @@ pub struct OcclusionTextureInfo {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF texture
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Texture {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -330,10 +446,18 @@ pub struct Texture {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampler: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF image
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Image {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -348,6 +472,14 @@ pub struct Image {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "bufferView")]
     pub buffer_view: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF sampler
@@ -368,6 +500,14 @@ pub struct Sampler {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "wrapT")]
     pub wrap_t: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF animation
@@ -380,7 +520,15 @@ pub struct Animation {
     pub channels: Option<Vec<AnimationChannel>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub samplers: Option<Vec<AnimationSampler>>
+    pub samplers: Option<Vec<AnimationSampler>>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF animation channel
@@ -388,7 +536,15 @@ pub struct Animation {
 pub struct AnimationChannel {
     pub sampler: usize,
     
-    pub target: AnimationChannelTarget
+    pub target: AnimationChannelTarget,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF animation channel target
@@ -396,7 +552,15 @@ pub struct AnimationChannel {
 pub struct AnimationChannelTarget {
     pub node: usize,
     
-    pub path: String
+    pub path: String,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF animation sampler
@@ -407,7 +571,15 @@ pub struct AnimationSampler {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpolation: Option<String>,
     
-    pub output: usize
+    pub output: usize,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents material extensions for glTF
@@ -416,6 +588,12 @@ pub struct MaterialExtensions {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "KHR_materials_pbrSpecularGlossiness")]
     pub pbr_specular_glossiness: Option<PbrSpecularGlossiness>,
+
+    /// Any other extension on the material, kept as opaque JSON. Must not contain
+    /// `KHR_materials_pbrSpecularGlossiness`; that key is the typed field above (a duplicate
+    /// would serialize twice).
+    #[serde(flatten)]
+    pub other: Extensions,
 }
 
 /// Represents a glTF specular-glossiness PBR material extension
@@ -440,6 +618,14 @@ pub struct PbrSpecularGlossiness {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "specularGlossinessTexture")]
     pub specular_glossiness_texture: Option<TextureInfo>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }
 
 /// Represents a glTF skin for skeletal animation
@@ -462,4 +648,12 @@ pub struct Skin {
     /// Index of the skeleton node (root joint)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skeleton: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
 }

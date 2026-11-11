@@ -1,13 +1,13 @@
 [package]
 name = "mesh-tools"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 authors = ["Michael Blazej"]
 description = "A Rust library for generating 3D meshes and exporting them to glTF/GLB files"
 license = "MIT"
 repository = "https://github.com/michaelblazej/mesh-tools"
 homepage = "https://github.com/michaelblazej/mesh-tools"
-documentation = "https://docs.rs/mesh-tools/0.6.1/mesh_tools/"
+documentation = "https://docs.rs/mesh-tools/0.7.0/mesh_tools/"
 keywords = ["gltf", "3d", "mesh", "export", "graphics"]
 categories = ["graphics", "rendering", "game-development", "simulation"]
 include = ["src/**/*.rs", "docs/*.md", "Cargo.toml", "LICENSE", "README.md", "CHANGELOG.md"]

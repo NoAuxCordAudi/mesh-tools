@@ -109,6 +109,7 @@ impl GltfBuilder {
             name,
             channels: None,
             samplers: None,
+            ..Default::default()
         };
         let animations = self.gltf.animations.get_or_insert_with(Vec::new);
         animations.push(animation);
@@ -547,6 +548,7 @@ impl GltfBuilder {
             input,
             interpolation: Some(interpolation.to_string()),
             output,
+            ..Default::default()
         });
         samplers.len() - 1
     }
@@ -555,7 +557,8 @@ impl GltfBuilder {
         let channels = self.gltf.animations.as_mut().unwrap()[animation].channels.get_or_insert_with(Vec::new);
         channels.push(AnimationChannel {
             sampler,
-            target: AnimationChannelTarget { node, path: path.to_string() },
+            target: AnimationChannelTarget { node, path: path.to_string(), ..Default::default() },
+            ..Default::default()
         });
         channels.len() - 1
     }

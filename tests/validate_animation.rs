@@ -176,7 +176,8 @@ fn a_shared_sampler_is_checked_once_per_channel() {
     let (m2, m3) = (d.morph2, d.morph3);
     d.b.gltf.animations.as_mut().unwrap()[0].channels.as_mut().unwrap().push(mesh_tools::AnimationChannel {
         sampler,
-        target: mesh_tools::AnimationChannelTarget { node: m3, path: "weights".into() },
+        target: mesh_tools::AnimationChannelTarget { node: m3, path: "weights".into(), ..Default::default() },
+        ..Default::default()
     });
     let r = d.b.validate();
     let count_errors: Vec<&String> = r.errors.iter().filter(|e| e.starts_with("ANIMATION_OUTPUT_COUNT")).collect();

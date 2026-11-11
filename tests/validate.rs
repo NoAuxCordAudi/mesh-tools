@@ -115,6 +115,7 @@ fn skin_structure_errors() {
         joints,
         inverse_bind_matrices: ibm,
         skeleton,
+        ..Default::default()
     };
     let cases: Vec<(&str, Skin)> = vec![
         ("SKIN_NO_JOINTS", skin_with(vec![], None, None)),

@@ -131,6 +131,7 @@ impl GltfBuilder {
             min_filter: min_filter,
             wrap_s: wrap_s,
             wrap_t: wrap_t,
+            ..Default::default()
         };
         
         if let Some(samplers) = &mut self.gltf.samplers {
@@ -158,6 +159,7 @@ impl GltfBuilder {
             uri: None,
             mime_type: Some(mime_type),
             buffer_view: Some(buffer_view),
+            ..Default::default()
         };
         
         if let Some(images) = &mut self.gltf.images {
@@ -177,6 +179,7 @@ impl GltfBuilder {
             name,
             source,
             sampler,
+            ..Default::default()
         };
         
         if let Some(textures) = &mut self.gltf.textures {

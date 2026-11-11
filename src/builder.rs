@@ -63,6 +63,7 @@ impl GltfBuilder {
             version: "2.0".to_string(),
             generator: Some("Rust glTF Export Library".to_string()),
             copyright: None,
+            ..Default::default()
         };
         
         gltf.asset = asset;
@@ -85,6 +86,7 @@ impl GltfBuilder {
         let buffer = Buffer {
             byte_length: 0, // Will be updated during export
             uri: None,     // Will be embedded in GLB
+            ..Default::default()
         };
         
         if let Some(buffers) = &mut gltf.buffers {
@@ -103,6 +105,7 @@ impl GltfBuilder {
         let scene = Scene {
             name,
             nodes,
+            ..Default::default()
         };
         
         if let Some(scenes) = &mut self.gltf.scenes {
@@ -296,6 +299,7 @@ impl GltfBuilder {
             min,
             max,
             normalized: None,
+            ..Default::default()
         };
         
         if let Some(accessors) = &mut self.gltf.accessors {
@@ -317,6 +321,7 @@ impl GltfBuilder {
             byte_length: byte_length,
             byte_stride: None,
             target,
+            ..Default::default()
         };
         
         if let Some(buffer_views) = &mut self.gltf.buffer_views {

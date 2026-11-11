@@ -134,12 +134,11 @@ fn custom_primitive_builder_is_still_honored() {
     let mut b = GltfBuilder::new();
     let idx = MeshBuilder::new(Some("C".into()))
         .with_positions(POS.to_vec())
-        .with_primitive_builder(Box::new(|_, _, _, _, material| Primitive {
-            attributes: Default::default(),
-            indices: None,
-            material,
-            mode: Some(0),
-            ..Default::default()
+        .with_primitive_builder(Box::new(|_, _, _, _, material| {
+            let mut p = Primitive::default();
+            p.material = material;
+            p.mode = Some(0);
+            p
         }))
         .with_material(7)
         .build_into(&mut b)
