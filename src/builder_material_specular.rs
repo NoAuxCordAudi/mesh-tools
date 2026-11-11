@@ -42,15 +42,8 @@ impl GltfBuilder {
         alpha_cutoff: Option<f32>,
         double_sided: Option<bool>,
     ) -> usize {
-        // Register the extension in the glTF document
-        if self.gltf.extensions_used.is_none() {
-            self.gltf.extensions_used = Some(vec!["KHR_materials_pbrSpecularGlossiness".to_string()]);
-        } else if let Some(ext_used) = &mut self.gltf.extensions_used {
-            if !ext_used.contains(&"KHR_materials_pbrSpecularGlossiness".to_string()) {
-                ext_used.push("KHR_materials_pbrSpecularGlossiness".to_string());
-            }
-        }
-        
+        self.register_extension(crate::builder_extensions::SPEC_GLOSS);
+
         // Create the material
         let mut material = crate::models::Material::default();
         material.name = name;

@@ -122,6 +122,7 @@ fn extras_and_extensions_survive_glb_and_read_back_via_gltf_crate() {
     n.extras = Some(json!([1, 2]));
     n.extensions = Some(ext());
     b.gltf.meshes.as_mut().unwrap()[mesh].extras = Some(json!({ "m": true }));
+    b.declare_extension_used("VENDOR_x").unwrap(); // hand-set extensions must be declared
 
     let glb = gltf::Gltf::from_slice(&b.to_glb_bytes().unwrap()).unwrap();
     let doc = &glb.document;

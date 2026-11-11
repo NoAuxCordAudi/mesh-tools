@@ -3,7 +3,7 @@
 ## 0.7.0
 
 Model groundwork for extensions/extras (part of the "Custom Extensions" and "Asset Information"
-work). Default output is byte-identical; builder APIs for setting these fields follow.
+work). Default output is byte-identical except where noted under Breaking.
 
 ### Added
 - `extensions: Option<Extensions>` and `extras: Option<serde_json::Value>` on every model struct
@@ -16,7 +16,28 @@ work). Default output is byte-identical; builder APIs for setting these fields f
 - `MaterialExtensions.other`: flattened map keeping unknown material extensions.
 - `Default` on `Accessor`, `BufferView`, `Buffer`, `Texture` and `Image`.
 
+- `ExtensionTarget`, `GltfBuilder::set_extension` / `set_extras` (opaque JSON on the root,
+  asset, scenes, nodes, meshes, primitives, materials, `pbrMetallicRoughness`, textures, images,
+  samplers, accessors, buffer views, buffers, skins, animations, channels and samplers),
+  `declare_extension_used` and `require_extension`. See `docs/EXTENSIONS.md`.
+- Asset setters `set_copyright`, `set_generator`, `clear_generator`, `set_min_version`.
+- `set_mesh_target_names`. Mesh `extras` set through `set_extras` and morph `targetNames` are
+  merged in either call order.
+- Validator codes `ASSET_VERSION_INVALID`, `ASSET_MIN_VERSION_INVALID`,
+  `ASSET_MIN_VERSION_EXCEEDS_VERSION`, `ASSET_COPYRIGHT_EMPTY`, `ASSET_GENERATOR_EMPTY`,
+  `EXTENSION_VALUE_NOT_OBJECT`, `EXTENSION_NOT_DECLARED`, `EXTENSIONS_USED_DUPLICATE`,
+  `EXTENSIONS_USED_EMPTY`, `EXTENSIONS_REQUIRED_EMPTY`, `EXTENSIONS_REQUIRED_NOT_USED` (errors),
+  `EXTENSION_NAME_INVALID`, `EXTENSION_DECLARED_UNUSED` (warnings). There is no
+  `EXTRAS_NOT_FINITE`: `serde_json::Value` cannot hold NaN or infinity.
+- `add_specular_glossiness_material` now registers its extension through the same registry;
+  its output is unchanged (covered by a test).
+- Corpus document `extensions`.
+
 ### Breaking
+- Documents that use an extension without listing it in `extensionsUsed`, or that have an empty
+  `extensionsUsed` / `extensionsRequired` array (previously silently stripped on export), now fail
+  validation and export. `to_glb_bytes_unchecked` keeps such an empty array in the output.
+- Asset fields that are empty strings or malformed versions are now validation errors.
 - `Gltf.extras` is now `Option<serde_json::Value>` (was `Option<HashMap<String, Value>>`); the
   spec allows any JSON value.
 - `Gltf.extensions` is now `Option<Extensions>` (was `Option<Value>`).

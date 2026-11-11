@@ -83,6 +83,7 @@ mod builder_material_specular; // Implementations for specular material handling
 mod builder_animation;        // Implementations for animation handling
 mod builder_skin;             // Implementations for skin handling
 mod builder_morph;            // Implementations for morph target handling
+mod builder_extensions;       // Extensions, extras and asset metadata
 pub mod validate;             // Document validation
 
 // Re-exports
@@ -103,6 +104,7 @@ pub use constants::primitive_mode;
 pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
 pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
 pub use builder_morph::MorphTarget;
+pub use builder_extensions::ExtensionTarget;
 
 // Compile and run every Rust code block in docs/SKINNING.md as a doctest, so the guide
 // cannot drift from the API.
@@ -119,3 +121,8 @@ struct MorphTargetsGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/VALIDATION.md")]
 struct ValidationGuideDoctests;
+
+// Likewise for docs/EXTENSIONS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/EXTENSIONS.md")]
+struct ExtensionsGuideDoctests;

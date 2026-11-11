@@ -67,5 +67,10 @@ Documents broken through the public `gltf` field must be rejected by both valida
 | Scene references a missing node | `SCENE_NODE_INVALID` | `UNRESOLVED_REFERENCE` |
 | Primitive references a missing material | `PRIMITIVE_MATERIAL_INVALID` | `UNRESOLVED_REFERENCE` |
 
+Extension and asset codes (`ASSET_*`, `EXTENSION_*`, `EXTENSIONS_*`) are listed in
+[EXTENSIONS.md](EXTENSIONS.md); the Khronos validator reports the same problems as
+`UNDECLARED_EXTENSION`, `EMPTY_ENTRY`, `UNUSED_EXTENSION_REQUIRED` and `UNSUPPORTED_EXTENSION`.
+These mappings are unverified against a local run of the pinned validator.
+
 The Khronos codes come from the validator's `lib/src/errors.dart` at the pinned version. Later
 milestones add rows here when they add in-crate codes.

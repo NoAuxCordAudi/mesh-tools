@@ -47,6 +47,59 @@ impl ValidationReport {
     }
 }
 
+/// Extension names are `VENDOR_name`: an upper-case vendor prefix, an underscore, then a name.
+fn valid_extension_name(n: &str) -> bool {
+    match n.split_once('_') {
+        Some((vendor, rest)) => {
+            !vendor.is_empty()
+                && vendor.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                && !rest.is_empty()
+                && rest.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        }
+        None => false,
+    }
+}
+
+/// Collect the names under every `extensions` object, reporting non-object payloads.
+/// `path` is only for messages. `extras` values are skipped.
+fn collect_extensions(
+    v: &serde_json::Value,
+    path: &str,
+    found: &mut std::collections::BTreeSet<String>,
+    r: &mut ValidationReport,
+) {
+    use serde_json::Value;
+    match v {
+        Value::Object(o) => {
+            for (k, child) in o {
+                if k == "extras" {
+                    continue;
+                }
+                let here = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
+                if k == "extensions" {
+                    if let Value::Object(exts) = child {
+                        for (name, payload) in exts {
+                            found.insert(name.clone());
+                            if !payload.is_object() {
+                                r.errors.push(format!(
+                                    "EXTENSION_VALUE_NOT_OBJECT: {here}.{name} must be a JSON object"
+                                ));
+                            }
+                        }
+                    }
+                }
+                collect_extensions(child, &here, found, r);
+            }
+        }
+        Value::Array(a) => {
+            for (i, child) in a.iter().enumerate() {
+                collect_extensions(child, &format!("{path}[{i}]"), found, r);
+            }
+        }
+        _ => {}
+    }
+}
+
 const ANIMATION_PATHS: [&str; 4] = ["translation", "rotation", "scale", "weights"];
 
 impl GltfBuilder {
@@ -54,6 +107,8 @@ impl GltfBuilder {
     pub fn validate(&self) -> ValidationReport {
         let mut r = ValidationReport::default();
         let doc = Doc::new(self);
+        doc.check_asset(&mut r);
+        doc.check_extensions(&mut r);
         doc.check_buffers(&mut r);
         doc.check_accessors(&mut r);
         doc.check_meshes(&mut r);
@@ -90,6 +145,81 @@ impl<'a> Doc<'a> {
             nodes: b.gltf.nodes.as_deref().unwrap_or(&[]),
             meshes: b.gltf.meshes.as_deref().unwrap_or(&[]),
             accessors: b.gltf.accessors.as_deref().unwrap_or(&[]),
+        }
+    }
+
+    fn check_asset(&self, r: &mut ValidationReport) {
+        use crate::builder_extensions::parse_version;
+        let a = &self.b.gltf.asset;
+        let version = parse_version(&a.version);
+        if version.is_none() {
+            r.errors.push(format!("ASSET_VERSION_INVALID: asset version {:?} is not <major>.<minor>", a.version));
+        }
+        if let Some(min) = &a.min_version {
+            match (parse_version(min), version) {
+                (None, _) => r.errors.push(format!("ASSET_MIN_VERSION_INVALID: minVersion {min:?} is not <major>.<minor>")),
+                (Some(m), Some(v)) if m > v => r.errors.push(format!(
+                    "ASSET_MIN_VERSION_EXCEEDS_VERSION: minVersion {min} is greater than version {}", a.version
+                )),
+                _ => {}
+            }
+        }
+        if a.copyright.as_deref() == Some("") {
+            r.errors.push("ASSET_COPYRIGHT_EMPTY: asset.copyright is an empty string".to_string());
+        }
+        if a.generator.as_deref() == Some("") {
+            r.errors.push("ASSET_GENERATOR_EMPTY: asset.generator is an empty string".to_string());
+        }
+    }
+
+    /// `extensionsUsed`/`extensionsRequired` bookkeeping against the extensions found in the
+    /// document (`extras` subtrees are application data and are not searched).
+    fn check_extensions(&self, r: &mut ValidationReport) {
+        let g = &self.b.gltf;
+        let used = g.extensions_used.as_deref();
+        let required = g.extensions_required.as_deref();
+        for (field, list, empty_code) in [
+            ("extensionsUsed", used, "EXTENSIONS_USED_EMPTY"),
+            ("extensionsRequired", required, "EXTENSIONS_REQUIRED_EMPTY"),
+        ] {
+            let Some(list) = list else { continue };
+            if list.is_empty() {
+                r.errors.push(format!("{empty_code}: {field} is an empty array; omit it instead"));
+            }
+            for (i, n) in list.iter().enumerate() {
+                if list[..i].contains(n) {
+                    r.errors.push(format!("EXTENSIONS_USED_DUPLICATE: {field} lists {n} more than once"));
+                }
+                if !valid_extension_name(n) {
+                    r.warnings.push(format!(
+                        "EXTENSION_NAME_INVALID: {field} entry {n:?} is not a VENDOR_name style identifier"
+                    ));
+                }
+            }
+        }
+        for n in required.unwrap_or(&[]) {
+            if !used.unwrap_or(&[]).contains(n) {
+                r.errors.push(format!("EXTENSIONS_REQUIRED_NOT_USED: {n} is required but not in extensionsUsed"));
+            }
+        }
+
+        // Serialization cannot fail for these plain data types; if it does, nothing is found.
+        let mut found = std::collections::BTreeSet::new();
+        if let Ok(doc) = serde_json::to_value(g) {
+            collect_extensions(&doc, "", &mut found, r);
+        }
+        for n in &found {
+            if !used.unwrap_or(&[]).contains(n) {
+                r.errors.push(format!("EXTENSION_NOT_DECLARED: extension {n} is used but not listed in extensionsUsed"));
+            }
+        }
+        for n in used.unwrap_or(&[]) {
+            if !found.contains(n) {
+                r.warnings.push(format!(
+                    "EXTENSION_DECLARED_UNUSED: {n} is in extensionsUsed but no object carries it \
+                     (fine for extensions without a payload object)"
+                ));
+            }
         }
     }
 

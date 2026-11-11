@@ -144,7 +144,10 @@ impl GltfBuilder {
         let index = self.add_mesh(name, primitives);
         let mesh = &mut self.gltf.meshes.as_mut().expect("add_mesh created the meshes array")[index];
         mesh.weights = default_weights;
-        mesh.extras = target_names.map(|n| serde_json::json!({ "targetNames": n }));
+        if let Some(n) = target_names {
+            crate::builder_extensions::merge_target_names(&mut mesh.extras, n)
+                .expect("a new mesh has no extras to conflict with");
+        }
         Ok(index)
     }
 

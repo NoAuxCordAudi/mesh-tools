@@ -169,6 +169,25 @@ fn skinned_doc() -> GltfBuilder {
     b
 }
 
+/// Asset metadata plus extras and a known extension (KHR_materials_unlit has an empty payload).
+fn extensions_doc() -> GltfBuilder {
+    use mesh_tools::ExtensionTarget as T;
+    let mut b = GltfBuilder::new();
+    b.set_copyright("(c) Example").unwrap();
+    b.set_generator("corpus").unwrap();
+    b.set_min_version("2.0").unwrap();
+    let mat = b.create_basic_material(Some("Unlit".into()), [0.2, 0.4, 0.6, 1.0]);
+    let mesh = b.create_box_with_material(1.0, Some(mat));
+    let mut b = scene_of(b, mesh);
+    b.set_extension(T::Material(mat), "KHR_materials_unlit", serde_json::json!({})).unwrap();
+    b.set_extras(T::Root, serde_json::json!(["any", "json", 1])).unwrap();
+    b.set_extras(T::Asset, serde_json::json!({ "note": "asset extras" })).unwrap();
+    for t in [T::Scene(0), T::Node(0), T::Mesh(mesh), T::Material(mat), T::Accessor(0), T::BufferView(0), T::Buffer(0)] {
+        b.set_extras(t, serde_json::json!({ "k": 1 })).unwrap();
+    }
+    b
+}
+
 fn morph_doc() -> GltfBuilder {
     let mut b = GltfBuilder::new();
     let up = MorphTarget::new().with_positions(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
@@ -203,6 +222,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("animation", animation_doc()),
         ("skinned", skinned_doc()),
         ("morph", morph_doc()),
+        ("extensions", extensions_doc()),
     ]
 }
 
@@ -227,7 +247,7 @@ fn write_corpus() -> Vec<PathBuf> {
 #[test]
 fn corpus_names_are_unique_and_non_empty() {
     let mut names: Vec<_> = corpus().into_iter().map(|(n, _)| n).collect();
-    assert!(names.len() >= 11);
+    assert!(names.len() >= 12);
     names.sort_unstable();
     let before = names.len();
     names.dedup();

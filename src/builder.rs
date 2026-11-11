@@ -377,14 +377,17 @@ impl GltfBuilder {
 
     /// Serialize to GLB bytes **without** validating the document.
     ///
-    /// Empty top-level arrays (which glTF forbids) are omitted. The result may be an invalid
+    /// Empty top-level arrays (which glTF forbids) are omitted, except `extensionsUsed` and
+    /// `extensionsRequired`, which are kept so the problem stays visible. The result may be an invalid
     /// glTF file; this exists for deliberately producing or inspecting such documents.
     pub fn to_glb_bytes_unchecked(&self) -> Result<Vec<u8>> {
         let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
 
         let mut value = serde_json::to_value(&self.gltf)?;
         if let Some(obj) = value.as_object_mut() {
-            obj.retain(|_, v| !matches!(v, serde_json::Value::Array(a) if a.is_empty()));
+            obj.retain(|k, v| {
+                k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
+            });
         }
         let json = serde_json::to_string(&value)?;
         let json_pad = (4 - (json.len() % 4)) % 4;
