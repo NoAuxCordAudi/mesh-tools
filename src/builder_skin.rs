@@ -4,6 +4,7 @@
 //! Skins are used for skeletal animation in glTF, where a mesh is deformed
 //! by a hierarchy of joints (bones).
 
+use crate::accessor::{AccessorSpec, AccessorType};
 use crate::builder::GltfBuilder;
 use crate::models::{Primitive, Skin};
 use crate::error::{GltfError, Result};
@@ -289,24 +290,9 @@ impl GltfBuilder {
             return Err(GltfError::InvalidInput(format!("inverse bind matrix {i} contains a non-finite value")));
         }
 
-        let mut bytes = Vec::with_capacity(matrices.len() * 64);
-        for m in matrices {
-            for v in m {
-                bytes.extend_from_slice(&v.to_le_bytes());
-            }
-        }
-
-        let (byte_offset, byte_length) = self.add_buffer_data(&bytes);
-        let buffer_view_index = self.add_buffer_view(byte_offset, byte_length, None);
-        Ok(self.add_accessor(
-            buffer_view_index,
-            5126, // FLOAT
-            matrices.len(),
-            "MAT4".to_string(),
-            None,
-            None,
-            None,
-        ))
+        let flat: Vec<f32> = matrices.iter().flatten().copied().collect();
+        // No buffer view target: the spec forbids one on inverse bind matrix data.
+        Ok(self.write_slice(&flat, AccessorType::Mat4, &AccessorSpec::new()))
     }
 
     /// Add a node with an associated skin
@@ -505,61 +491,49 @@ impl GltfBuilder {
         joint_count: usize,
         material: Option<usize>,
     ) -> Result<Primitive> {
-        use crate::constants::{buffer_view_target::{ARRAY_BUFFER, ELEMENT_ARRAY_BUFFER}, component_type};
+        use crate::accessor::{AccessorSpec, AccessorType as T, Bounds, BufferViewTarget::{ArrayBuffer, ElementArrayBuffer}};
         use std::collections::HashMap;
 
-        let vertex_count = validate_skinned_geometry(
-            positions, indices, normals, texcoord_sets, skin_sets, joint_count,
-        )?;
+        validate_skinned_geometry(positions, indices, normals, texcoord_sets, skin_sets, joint_count)?;
 
         // ---- All input is valid; from here on we only write. ----
         let mut attributes = HashMap::new();
+        let vertex = AccessorSpec::new().with_target(ArrayBuffer);
 
-        let (min, max) = crate::mesh::calculate_bounds(positions);
-        let pos_bytes = f32_bytes(positions);
         attributes.insert(
             "POSITION".to_string(),
-            self.write_attribute(&pos_bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", Some(min), Some(max)),
+            self.write_slice(positions, T::Vec3, &vertex.clone().with_bounds(Bounds::Compute)),
         );
         if let Some(n) = normals {
-            attributes.insert(
-                "NORMAL".to_string(),
-                self.write_attribute(&f32_bytes(n), ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", None, None),
-            );
+            attributes.insert("NORMAL".to_string(), self.write_slice(n, T::Vec3, &vertex));
         }
         for (n, t) in texcoord_sets.iter().enumerate() {
-            attributes.insert(
-                format!("TEXCOORD_{n}"),
-                self.write_attribute(&f32_bytes(t), ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC2", None, None),
-            );
+            attributes.insert(format!("TEXCOORD_{n}"), self.write_slice(t, T::Vec2, &vertex));
         }
         for (n, set) in skin_sets.iter().enumerate() {
-            let (joint_bytes, joint_type) = match &set.joints {
-                JointIndices::U8(j) => (j.iter().flatten().copied().collect::<Vec<u8>>(), component_type::UNSIGNED_BYTE),
-                JointIndices::U16(j) => (
-                    j.iter().flatten().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>(),
-                    component_type::UNSIGNED_SHORT,
-                ),
+            let joints = match &set.joints {
+                JointIndices::U8(j) => {
+                    let flat: Vec<u8> = j.iter().flatten().copied().collect();
+                    self.write_slice(&flat, T::Vec4, &vertex)
+                }
+                JointIndices::U16(j) => {
+                    let flat: Vec<u16> = j.iter().flatten().copied().collect();
+                    self.write_slice(&flat, T::Vec4, &vertex)
+                }
             };
-            attributes.insert(
-                format!("JOINTS_{n}"),
-                self.write_attribute(&joint_bytes, ARRAY_BUFFER, joint_type, vertex_count, "VEC4", None, None),
-            );
-            let weight_bytes: Vec<u8> = set.weights.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
-            attributes.insert(
-                format!("WEIGHTS_{n}"),
-                self.write_attribute(&weight_bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC4", None, None),
-            );
+            attributes.insert(format!("JOINTS_{n}"), joints);
+            let weights: Vec<f32> = set.weights.iter().flatten().copied().collect();
+            attributes.insert(format!("WEIGHTS_{n}"), self.write_slice(&weights, T::Vec4, &vertex));
         }
 
+        let index_spec = AccessorSpec::new().with_target(ElementArrayBuffer);
         let index_accessor = indices.map(|idx| {
             // 65535 is the primitive-restart value and may not be used as an index.
             if idx.iter().all(|&i| i < 65535) {
-                let bytes: Vec<u8> = idx.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
-                self.write_attribute(&bytes, ELEMENT_ARRAY_BUFFER, component_type::UNSIGNED_SHORT, idx.len(), "SCALAR", None, None)
+                let narrow: Vec<u16> = idx.iter().map(|&i| i as u16).collect();
+                self.write_slice(&narrow, T::Scalar, &index_spec)
             } else {
-                let bytes: Vec<u8> = idx.iter().flat_map(|i| i.to_le_bytes()).collect();
-                self.write_attribute(&bytes, ELEMENT_ARRAY_BUFFER, component_type::UNSIGNED_INT, idx.len(), "SCALAR", None, None)
+                self.write_slice(idx, T::Scalar, &index_spec)
             }
         });
 
@@ -570,22 +544,6 @@ impl GltfBuilder {
             mode: Some(crate::constants::primitive_mode::TRIANGLES),
             ..Default::default()
         })
-    }
-
-    /// Write `bytes` as a new buffer view + accessor and return the accessor index.
-    pub(crate) fn write_attribute(
-        &mut self,
-        bytes: &[u8],
-        target: usize,
-        component_type: usize,
-        count: usize,
-        type_: &str,
-        min: Option<Vec<f32>>,
-        max: Option<Vec<f32>>,
-    ) -> usize {
-        let (offset, length) = self.add_buffer_data(bytes);
-        let view = self.add_buffer_view(offset, length, Some(target));
-        self.add_accessor(view, component_type, count, type_.to_string(), None, min, max)
     }
 }
 
@@ -627,10 +585,6 @@ const WEIGHT_SUM_TOLERANCE: f32 = 1e-5;
 
 fn invalid(msg: String) -> GltfError {
     GltfError::InvalidInput(msg)
-}
-
-fn f32_bytes(values: &[f32]) -> Vec<u8> {
-    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Validate everything about a skinned primitive without mutating anything.

@@ -183,6 +183,7 @@ fn view_with(offset: usize, len: usize, stride: Option<usize>, target: Option<us
 
 fn acc(component: usize, ty: &str, count: usize) -> Accessor {
     let mut a = Accessor::default();
+    a.buffer_view = Some(0);
     a.component_type = component;
     a.count = count;
     a.type_ = ty.into();

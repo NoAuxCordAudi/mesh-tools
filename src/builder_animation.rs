@@ -24,6 +24,7 @@
 //!   outputs `3 * N * M`, laid out per keyframe as `[in-tangents(M), values(M), out-tangents(M)]`.
 //! - Animation data buffer views have no `target`.
 
+use crate::accessor::{AccessorSpec, AccessorType, Bounds};
 use crate::builder::GltfBuilder;
 use crate::error::{GltfError, Result};
 use crate::models::{Animation, AnimationChannel, AnimationChannelTarget, AnimationSampler};
@@ -53,11 +54,11 @@ impl fmt::Display for AnimationPath {
 
 impl AnimationPath {
     /// Accessor `type` the sampler output must have for this path.
-    fn output_type(self) -> &'static str {
+    fn output_type(self) -> AccessorType {
         match self {
-            AnimationPath::Translation | AnimationPath::Scale => "VEC3",
-            AnimationPath::Rotation => "VEC4",
-            AnimationPath::Weights => "SCALAR",
+            AnimationPath::Translation | AnimationPath::Scale => AccessorType::Vec3,
+            AnimationPath::Rotation => AccessorType::Vec4,
+            AnimationPath::Weights => AccessorType::Scalar,
         }
     }
 }
@@ -191,11 +192,11 @@ impl GltfBuilder {
                 "animation {animation_index} has no sampler {sampler_index}"
             )))?;
         let output = self.accessor_info(sampler.output)?;
-        if output.type_ != target_path.output_type() {
+        if output.type_ != target_path.output_type().as_str() {
             return Err(invalid(format!(
                 "sampler {sampler_index} outputs {} but the {target_path} path needs {}",
                 output.type_,
-                target_path.output_type()
+                target_path.output_type().as_str()
             )));
         }
         if target_path == AnimationPath::Weights {
@@ -517,29 +518,13 @@ impl GltfBuilder {
         }
 
         // ---- validated; write ----
-        let input_accessor = self.write_f32_accessor(times, times.len(), "SCALAR", Some(vec![times[0]]), Some(vec![times[times.len() - 1]]));
-        // Accessor element count: VEC3/VEC4 count elements, a weights SCALAR accessor counts floats.
-        let per_keyframe = if path == AnimationPath::Weights { width } else { 1 };
-        let elements = keyframes * per_keyframe * if plain { 1 } else { 3 };
-        let output_accessor = self.write_f32_accessor(data, elements, path.output_type(), None, None);
+        // Animation data is not vertex/index data, so the buffer views have no target. The input
+        // carries min/max; the output has none.
+        let input_accessor = self.write_slice(times, AccessorType::Scalar, &AccessorSpec::new().with_bounds(Bounds::Compute));
+        let output_accessor = self.write_slice(data, path.output_type(), &AccessorSpec::new());
         let sampler = self.push_sampler(animation_index, input_accessor, output_accessor, interpolation);
         let channel = self.push_channel(animation_index, sampler, node_index, path);
         Ok((channel, sampler))
-    }
-
-    fn write_f32_accessor(
-        &mut self,
-        data: &[f32],
-        count: usize,
-        type_: &str,
-        min: Option<Vec<f32>>,
-        max: Option<Vec<f32>>,
-    ) -> usize {
-        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let (offset, length) = self.add_buffer_data(&bytes);
-        // Animation data is not vertex/index data, so the buffer view has no target.
-        let view = self.add_buffer_view(offset, length, None);
-        self.add_accessor(view, 5126, count, type_.to_string(), None, min, max)
     }
 
     fn push_sampler(&mut self, animation: usize, input: usize, output: usize, interpolation: InterpolationType) -> usize {

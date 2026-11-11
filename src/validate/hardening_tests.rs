@@ -33,7 +33,7 @@ fn rewrite_joints_strided(b: &mut GltfBuilder, mesh: usize, rows: [[u16; 4]; 3])
         data.extend_from_slice(&[9, 9, 9, 9]);
     }
     let (off, len) = b.add_buffer_data(&data);
-    let vi = b.gltf.accessors.as_ref().unwrap()[ja].buffer_view;
+    let vi = b.gltf.accessors.as_ref().unwrap()[ja].buffer_view.unwrap();
     assert_eq!(b.gltf.accessors.as_ref().unwrap()[ja].component_type, 5123);
     let v = &mut b.gltf.buffer_views.as_mut().unwrap()[vi];
     v.byte_offset = off;

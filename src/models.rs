@@ -222,8 +222,10 @@ pub struct Accessor {
     /// Optional user-facing name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(rename = "bufferView")]
-    pub buffer_view: usize,
+    /// Buffer view holding the data. `None` means the accessor reads as all zeros (or is
+    /// defined only by sparse data).
+    #[serde(rename = "bufferView", skip_serializing_if = "Option::is_none")]
+    pub buffer_view: Option<usize>,
     #[serde(rename = "componentType")]
     pub component_type: usize,
     pub count: usize,
@@ -235,10 +237,10 @@ pub struct Accessor {
     pub byte_offset: Option<usize>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub min: Option<Vec<f32>>,
+    pub min: Option<Vec<f64>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max: Option<Vec<f32>>,
+    pub max: Option<Vec<f64>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<bool>,

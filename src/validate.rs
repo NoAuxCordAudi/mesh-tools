@@ -21,6 +21,7 @@
 
 use crate::builder::GltfBuilder;
 use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
+use crate::accessor::{component_size, decode_element, element_size, integer_range};
 use crate::constants::buffer_view_target;
 use crate::models::{Accessor, Mesh, Primitive};
 
@@ -295,10 +296,6 @@ impl<'a> Doc<'a> {
     fn check_accessors(&self, r: &mut ValidationReport) {
         let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
         for (i, a) in self.accessors.iter().enumerate() {
-            let Some(view) = views.get(a.buffer_view) else {
-                r.errors.push(format!("ACCESSOR_BUFFER_VIEW_INVALID: accessor {i} references buffer view {}", a.buffer_view));
-                continue;
-            };
             let (Some(elem), Some(comp)) = (element_size(a.component_type, &a.type_), component_size(a.component_type)) else {
                 r.errors.push(format!(
                     "ACCESSOR_TYPE_INVALID: accessor {i} has component type {} and type {:?}", a.component_type, a.type_
@@ -309,6 +306,23 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!("ACCESSOR_COUNT_ZERO: accessor {i} has no elements"));
                 continue;
             }
+            if a.normalized == Some(true) && !matches!(a.component_type, 5120..=5123) {
+                r.errors.push(format!(
+                    "ACCESSOR_NORMALIZED_INVALID: accessor {i} is normalized but its component type {} is not an 8/16-bit integer", a.component_type
+                ));
+            }
+            let bounds_ok = self.check_bounds(i, a, r);
+            let Some(view_index) = a.buffer_view else {
+                // Without a view the accessor reads as zeros; a byteOffset then has nothing to offset.
+                if a.byte_offset.is_some() {
+                    r.errors.push(format!("ACCESSOR_BUFFER_VIEW_MISSING: accessor {i} has a byteOffset but no bufferView"));
+                }
+                continue;
+            };
+            let Some(view) = views.get(view_index) else {
+                r.errors.push(format!("ACCESSOR_BUFFER_VIEW_INVALID: accessor {i} references buffer view {view_index}"));
+                continue;
+            };
             let off = a.byte_offset.unwrap_or(0);
             if off % comp != 0 {
                 r.errors.push(format!(
@@ -328,8 +342,7 @@ impl<'a> Doc<'a> {
                 }
                 if s < elem {
                     r.errors.push(format!(
-                        "BUFFER_VIEW_STRIDE_TOO_SMALL: byteStride {s} of buffer view {} is smaller than the {elem}-byte elements of accessor {i}",
-                        a.buffer_view
+                        "BUFFER_VIEW_STRIDE_TOO_SMALL: byteStride {s} of buffer view {view_index} is smaller than the {elem}-byte elements of accessor {i}",
                     ));
                 }
             }
@@ -341,7 +354,77 @@ impl<'a> Doc<'a> {
             if !end.is_some_and(|e| e <= view.byte_length) {
                 let need = end.map_or_else(|| "an overflowing number of".to_string(), |e| e.to_string());
                 r.errors.push(format!(
-                    "ACCESSOR_RANGE: accessor {i} needs {need} bytes but buffer view {} has {}", a.buffer_view, view.byte_length
+                    "ACCESSOR_RANGE: accessor {i} needs {need} bytes but buffer view {view_index} has {}", view.byte_length
+                ));
+            } else {
+                self.check_data(i, bounds_ok, r);
+            }
+        }
+    }
+
+    /// Shape checks on `min`/`max`: length, value domain, order. Returns whether both are
+    /// present and well-formed, so they can be compared with the data.
+    fn check_bounds(&self, i: usize, a: &Accessor, r: &mut ValidationReport) -> bool {
+        let comps = crate::accessor::type_shape(&a.type_).map_or(0, |(c, rw)| c * rw);
+        let mut ok = a.min.is_some() && a.max.is_some();
+        for (name, b) in [("min", &a.min), ("max", &a.max)] {
+            let Some(b) = b else { continue };
+            if b.len() != comps {
+                r.errors.push(format!("ACCESSOR_BOUNDS_LENGTH: accessor {i} {name} has {} values, expected {comps}", b.len()));
+                ok = false;
+                continue;
+            }
+            let bad = b.iter().position(|v| match integer_range(a.component_type) {
+                Some((lo, hi)) => !v.is_finite() || v.fract() != 0.0 || *v < lo || *v > hi,
+                None => !v.is_finite(),
+            });
+            if let Some(k) = bad {
+                r.errors.push(format!(
+                    "ACCESSOR_BOUNDS_TYPE: accessor {i} {name}[{k}] = {} is not a valid value of component type {}", b[k], a.component_type
+                ));
+                ok = false;
+            }
+        }
+        if let (true, Some(min), Some(max)) = (ok, &a.min, &a.max) {
+            if let Some(k) = (0..comps).find(|&k| min[k] > max[k]) {
+                r.errors.push(format!("ACCESSOR_BOUNDS_ORDER: accessor {i} min[{k}] = {} exceeds max[{k}] = {}", min[k], max[k]));
+                ok = false;
+            }
+        }
+        ok
+    }
+
+    /// Compare the data with the accessor's bounds and look for NaN / infinity.
+    fn check_data(&self, i: usize, bounds_ok: bool, r: &mut ValidationReport) {
+        let Some((a, elems)) = self.accessor_elements(i) else { return };
+        let is_float = a.component_type == 5126;
+        let mut seen: Option<(Vec<f64>, Vec<f64>)> = None;
+        let mut nonfinite = None;
+        for (e, bytes) in elems.enumerate() {
+            let Some(vals) = decode_element(a.component_type, &a.type_, bytes) else { return };
+            if is_float && nonfinite.is_none() && vals.iter().any(|v| !v.is_finite()) {
+                nonfinite = Some(e);
+            }
+            match &mut seen {
+                None => seen = Some((vals.clone(), vals)),
+                Some((lo, hi)) => {
+                    for (k, v) in vals.iter().enumerate() {
+                        lo[k] = lo[k].min(*v);
+                        hi[k] = hi[k].max(*v);
+                    }
+                }
+            }
+        }
+        if let Some(e) = nonfinite {
+            r.errors.push(format!("ACCESSOR_DATA_NONFINITE: accessor {i} element {e} contains NaN or infinity"));
+            return;
+        }
+        let (Some((lo, hi)), true, Some(min), Some(max)) = (seen, bounds_ok, &a.min, &a.max) else { return };
+        let same = |stored: f64, actual: f64| if is_float { stored as f32 == actual as f32 } else { stored == actual };
+        for (name, stored, actual) in [("min", min, &lo), ("max", max, &hi)] {
+            if let Some(k) = (0..actual.len()).find(|&k| !same(stored[k], actual[k])) {
+                r.errors.push(format!(
+                    "ACCESSOR_BOUNDS_MISMATCH: accessor {i} {name}[{k}] is {} but the data's is {}", stored[k], actual[k]
                 ));
             }
         }
@@ -351,7 +434,10 @@ impl<'a> Doc<'a> {
     /// in a view whose target, if any, matches that use; index data cannot be strided.
     fn check_view_usage(&self, r: &mut ValidationReport) {
         let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
-        let view_of = |acc: usize| self.accessors.get(acc).and_then(|a| views.get(a.buffer_view).map(|v| (a.buffer_view, v)));
+        let view_of = |acc: usize| {
+            let vi = self.accessors.get(acc)?.buffer_view?;
+            views.get(vi).map(|v| (vi, v))
+        };
         for (mi, m) in self.meshes.iter().enumerate() {
             for (pi, p) in m.primitives.iter().enumerate() {
                 if let Some((vi, v)) = p.indices.and_then(view_of) {
@@ -405,8 +491,12 @@ impl<'a> Doc<'a> {
             }
             for (pi, p) in mesh.primitives.iter().enumerate() {
                 for (name, &acc) in &p.attributes {
-                    if acc >= self.accessors.len() {
-                        r.errors.push(format!("PRIMITIVE_ACCESSOR_INVALID: mesh {mi} primitive {pi} {name} references accessor {acc}"));
+                    match self.accessors.get(acc) {
+                        None => r.errors.push(format!("PRIMITIVE_ACCESSOR_INVALID: mesh {mi} primitive {pi} {name} references accessor {acc}")),
+                        Some(a) if name == "POSITION" && (a.min.is_none() || a.max.is_none()) => r.errors.push(format!(
+                            "ACCESSOR_BOUNDS_REQUIRED: mesh {mi} primitive {pi} POSITION accessor {acc} lacks min/max"
+                        )),
+                        _ => {}
                     }
                 }
                 if let Some(idx) = p.indices {
@@ -665,7 +755,7 @@ impl<'a> Doc<'a> {
     /// one element's bytes. `None` if the accessor, its view or its range is invalid.
     fn accessor_elements(&self, index: usize) -> Option<(&Accessor, impl Iterator<Item = &[u8]>)> {
         let a = self.accessors.get(index)?;
-        let view = self.b.gltf.buffer_views.as_ref()?.get(a.buffer_view)?;
+        let view = self.b.gltf.buffer_views.as_ref()?.get(a.buffer_view?)?;
         let elem = element_size(a.component_type, &a.type_)?;
         let start = view.byte_offset.checked_add(a.byte_offset.unwrap_or(0))?;
         let stride = view.byte_stride.unwrap_or(elem);
@@ -866,32 +956,6 @@ fn joint_sets(p: &Primitive) -> Vec<usize> {
     let mut v: Vec<usize> = p.attributes.keys().filter_map(|k| k.strip_prefix("JOINTS_")?.parse().ok()).collect();
     v.sort_unstable();
     v
-}
-
-fn component_size(component_type: usize) -> Option<usize> {
-    match component_type {
-        5120 | 5121 => Some(1),
-        5122 | 5123 => Some(2),
-        5125 | 5126 => Some(4),
-        _ => None,
-    }
-}
-
-/// Bytes per element. Matrix columns are padded to 4-byte boundaries (glTF 3.6.2.4), so
-/// MAT2 BYTE is 8, MAT3 BYTE is 12 and MAT3 SHORT is 24.
-fn element_size(component_type: usize, type_: &str) -> Option<usize> {
-    let comp = component_size(component_type)?;
-    let (cols, rows) = match type_ {
-        "SCALAR" => return Some(comp),
-        "VEC2" => return Some(comp * 2),
-        "VEC3" => return Some(comp * 3),
-        "VEC4" => return Some(comp * 4),
-        "MAT2" => (2, 2),
-        "MAT3" => (3, 3),
-        "MAT4" => (4, 4),
-        _ => return None,
-    };
-    Some((comp * rows).div_ceil(4) * 4 * cols)
 }
 
 /// Topmost ancestor of `node`, or `None` if the parent chain loops.

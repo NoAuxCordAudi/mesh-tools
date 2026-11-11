@@ -74,12 +74,14 @@ pub mod compat;      // Compatibility layer for mint math types
 pub mod material;    // Material creation and management
 pub mod mesh;        // Mesh creation and manipulation
 pub mod builder;     // Main GltfBuilder implementation
+pub mod accessor;    // Typed accessor writer types
 
 // Internal implementation modules
 mod builder_primitives;       // Implementations for primitive shape creation
 mod builder_texture;          // Implementations for texture handling
 mod builder_material;         // Implementations for material handling
 mod builder_material_specular; // Implementations for specular material handling
+mod builder_accessor;         // The single accessor writer
 mod builder_animation;        // Implementations for animation handling
 mod builder_skin;             // Implementations for skin handling
 mod builder_morph;            // Implementations for morph target handling
@@ -92,6 +94,7 @@ pub use models::*;
 pub use builder::GltfBuilder;
 pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
+pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType};
 
 // Constants re-exports
 pub use constants::accessor_type;

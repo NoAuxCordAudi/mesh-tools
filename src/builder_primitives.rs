@@ -14,7 +14,6 @@
 //! functions in the `primitives` module.
 
 use crate::builder::GltfBuilder;
-use crate::constants::{accessor_type, buffer_view_target, component_type};
 use crate::models::Primitive;
 use crate::primitives;
 use std::collections::HashMap;
@@ -322,120 +321,28 @@ impl GltfBuilder {
                             normals: Option<Vec<Vector3<f32>>>, 
                             texcoords: Option<Vec<Vec<Vector2<f32>>>>,
                             material: Option<usize>) -> usize {
-        // Calculate bounds for the positions
-        let (min_point, max_point) = if !positions.is_empty() {
-            let mut min = crate::compat::point3::new(f32::MAX, f32::MAX, f32::MAX);
-            let mut max = crate::compat::point3::new(f32::MIN, f32::MIN, f32::MIN);
-            
-            for point in positions {
-                min.x = min.x.min(point.x);
-                min.y = min.y.min(point.y);
-                min.z = min.z.min(point.z);
-                
-                max.x = max.x.max(point.x);
-                max.y = max.y.max(point.y);
-                max.z = max.z.max(point.z);
-            }
-            
-            (Some(min), Some(max))
-        } else {
-            (None, None)
-        };
-        
-        // Convert Point3 min/max to Vec<f32> for accessor
-        let min = min_point.map(|p| vec![p.x, p.y, p.z]);
-        let max = max_point.map(|p| vec![p.x, p.y, p.z]);
-        
-        // Convert positions from Point3 to flat array for buffer
-        let flat_positions: Vec<f32> = positions.iter().flat_map(|p| vec![p.x, p.y, p.z]).collect();
-        
-        // Add position data to buffer
-        let pos_bytes = le_bytes(&flat_positions);
-        let (pos_offset, pos_length) = self.add_buffer_data(&pos_bytes);
-        let pos_buffer_view = self.add_buffer_view(pos_offset, pos_length, Some(buffer_view_target::ARRAY_BUFFER));
-        
-        // Add position accessor
-        let vertex_count = positions.len();
-        let pos_accessor = self.add_accessor(
-            pos_buffer_view,
-            component_type::FLOAT,
-            vertex_count,
-            accessor_type::VEC3.to_string(),
-            None,
-            min,
-            max
-        );
-        
-        // Flatten the Triangle structs into a flat list of indices
-        let flat_indices: Vec<u32> = indices.iter()
-            .flat_map(|triangle| vec![triangle.a, triangle.b, triangle.c])
-            .collect();
-            
-        // Add index data to buffer
-        let idx_bytes = le_bytes(&flat_indices);
-        let (idx_offset, idx_length) = self.add_buffer_data(&idx_bytes);
-        let idx_buffer_view = self.add_buffer_view(idx_offset, idx_length, Some(buffer_view_target::ELEMENT_ARRAY_BUFFER));
-        
-        // Add index accessor
-        let idx_accessor = self.add_accessor(
-            idx_buffer_view,
-            component_type::UNSIGNED_INT,  // Use UNSIGNED_INT for u32 indices
-            flat_indices.len(),
-            accessor_type::SCALAR.to_string(),
-            None,
-            None,
-            None
-        );
-        
-        // Build attributes map
+        use crate::accessor::{AccessorSpec, AccessorType as T, Bounds, BufferViewTarget};
+        let vertex = AccessorSpec::new().with_target(BufferViewTarget::ArrayBuffer);
+
+        // Position bounds are computed from the data (none for an empty mesh).
+        let flat_positions: Vec<f32> = positions.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+        let pos_accessor = self.write_slice(&flat_positions, T::Vec3, &vertex.clone().with_bounds(Bounds::Compute));
+
+        let flat_indices: Vec<u32> = indices.iter().flat_map(|t| [t.a, t.b, t.c]).collect();
+        let idx_accessor = self.write_slice(&flat_indices, T::Scalar, &AccessorSpec::new().with_target(BufferViewTarget::ElementArrayBuffer));
+
         let mut attributes = HashMap::new();
         attributes.insert("POSITION".to_string(), pos_accessor);
-        
-        // Add normals if provided
+
         if let Some(normal_data) = normals {
-            // Convert normals from Vector3 to flat array for buffer
-            let flat_normals: Vec<f32> = normal_data.iter().flat_map(|n| vec![n.x, n.y, n.z]).collect();
-            
-            let norm_bytes = le_bytes(&flat_normals);
-            let (norm_offset, norm_length) = self.add_buffer_data(&norm_bytes);
-            let norm_buffer_view = self.add_buffer_view(norm_offset, norm_length, Some(buffer_view_target::ARRAY_BUFFER));
-            
-            let normal_accessor = self.add_accessor(
-                norm_buffer_view,
-                component_type::FLOAT,
-                normal_data.len(),
-                accessor_type::VEC3.to_string(),
-                None,
-                None,
-                None
-            );
-            
-            attributes.insert("NORMAL".to_string(), normal_accessor);
+            let flat: Vec<f32> = normal_data.iter().flat_map(|n| [n.x, n.y, n.z]).collect();
+            attributes.insert("NORMAL".to_string(), self.write_slice(&flat, T::Vec3, &vertex));
         }
-        
-        // Add texture coordinates if provided
-        let mut texcoord_accessors = Vec::new();
+
         if let Some(texcoord_sets) = texcoords {
             for (i, texcoord_data) in texcoord_sets.iter().enumerate() {
-                // Convert Vector2 to flat array for buffer
-                let flat_texcoords: Vec<f32> = texcoord_data.iter().flat_map(|uv| vec![uv.x, uv.y]).collect();
-                
-                let tc_bytes = le_bytes(&flat_texcoords);
-                let (tc_offset, tc_length) = self.add_buffer_data(&tc_bytes);
-                let tc_buffer_view = self.add_buffer_view(tc_offset, tc_length, Some(buffer_view_target::ARRAY_BUFFER));
-                
-                let tc_accessor = self.add_accessor(
-                    tc_buffer_view,
-                    component_type::FLOAT,
-                    texcoord_data.len(), // Number of Vector2 elements
-                    accessor_type::VEC2.to_string(),
-                    None,
-                    None,
-                    None
-                );
-                
-                attributes.insert(format!("TEXCOORD_{}", i), tc_accessor);
-                texcoord_accessors.push(tc_accessor);
+                let flat: Vec<f32> = texcoord_data.iter().flat_map(|uv| [uv.x, uv.y]).collect();
+                attributes.insert(format!("TEXCOORD_{}", i), self.write_slice(&flat, T::Vec2, &vertex));
             }
         }
         
@@ -702,29 +609,4 @@ impl GltfBuilder {
         // Create the mesh using the types returned by the primitives module
         self.create_simple_mesh(None, &positions, &indices, Some(normals), Some(uvs), material)
     }
-}
-
-/// Little-endian bytes of a slice of 4-byte values, independent of the host byte order.
-trait ToLe: Copy {
-    fn push_le(self, out: &mut Vec<u8>);
-}
-
-impl ToLe for f32 {
-    fn push_le(self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.to_le_bytes());
-    }
-}
-
-impl ToLe for u32 {
-    fn push_le(self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.to_le_bytes());
-    }
-}
-
-fn le_bytes<T: ToLe>(values: &[T]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 4);
-    for &v in values {
-        v.push_le(&mut out);
-    }
-    out
 }

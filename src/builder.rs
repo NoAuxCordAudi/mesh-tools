@@ -277,32 +277,6 @@ impl GltfBuilder {
         }
     }
     
-    /// Add an accessor to the glTF document
-    pub(crate) fn add_accessor(&mut self, buffer_view: usize, component_type: usize, 
-                       count: usize, type_: String, byte_offset: Option<usize>,
-                       min: Option<Vec<f32>>, max: Option<Vec<f32>>) -> usize {
-        let accessor = Accessor {
-            buffer_view: buffer_view,
-            component_type: component_type,
-            count,
-            type_,
-            byte_offset: byte_offset,
-            min,
-            max,
-            normalized: None,
-            ..Default::default()
-        };
-        
-        if let Some(accessors) = &mut self.gltf.accessors {
-            let index = accessors.len();
-            accessors.push(accessor);
-            index
-        } else {
-            self.gltf.accessors = Some(vec![accessor]);
-            0
-        }
-    }
-    
     /// Add a buffer view to the glTF document
     pub(crate) fn add_buffer_view(&mut self, byte_offset: usize, byte_length: usize, 
                           target: Option<usize>) -> usize {
@@ -446,6 +420,7 @@ impl GltfBuilder {
                 k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
             });
         }
+        crate::builder_accessor::write_integer_bounds_as_integers(&mut value);
         let json = serde_json::to_string(&value)?;
         let json_pad = (4 - (json.len() % 4)) % 4;
         let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;

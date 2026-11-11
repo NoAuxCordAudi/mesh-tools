@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0
+
+Typed accessor writer (part 1 of the Accessors / Buffer Views work; no README row becomes Full yet,
+sparse accessors and interleaved views are still to come). Existing output is byte-identical,
+pinned by golden tests for the primitive, skin, animation and morph writers
+(`tests/accessor_goldens.rs`).
+
+### Added
+- `ComponentType`, `AccessorType`, `BufferViewTarget`, the sealed `Component` trait (`i8`, `u8`,
+  `i16`, `u16`, `u32`, `f32`), `AccessorSpec` and `Bounds` (`None`, `Compute`, `Explicit`).
+- `GltfBuilder::add_accessor_from_slice` (pads MAT2/MAT3 columns from tight input, rejects NaN and
+  infinity, normalized only for 8/16-bit integers), `add_accessor_in_view`, `add_zero_accessor`
+  (no `bufferView`, writes no bytes) and `add_data_view`. `add_accessor_in_view` also rejects NaN/infinity in `FLOAT` data. All validate first, so an `Err` leaves
+  the document unchanged.
+- Validator errors `ACCESSOR_NORMALIZED_INVALID`, `ACCESSOR_BUFFER_VIEW_MISSING` (a `byteOffset`
+  without a `bufferView`), `ACCESSOR_BOUNDS_LENGTH`, `ACCESSOR_BOUNDS_ORDER`,
+  `ACCESSOR_BOUNDS_TYPE` (non-integer or out-of-range bound on an integer accessor),
+  `ACCESSOR_BOUNDS_MISMATCH` (bounds differ from the data; an error from the start),
+  `ACCESSOR_BOUNDS_REQUIRED` (`POSITION` without min/max) and `ACCESSOR_DATA_NONFINITE`.
+- Bounds of integer accessors are written as JSON integers.
+
+### Changed (breaking, pre-1.0)
+- `Accessor.buffer_view` is `Option<usize>` (`None` = all zeros). `Accessor::default()` therefore
+  has no view; set `Some(i)` when building by hand.
+- `Accessor.min` / `max` are `Option<Vec<f64>>` (were `f32`), so `u32` bounds above 2^24 are exact.
+  `FLOAT` bounds are the widened `f32` values, as before.
+- Every accessor the crate writes (primitives, skins, inverse bind matrices, morph targets,
+  animation) goes through one writer. The `POSITION` accessor of any primitive must now carry
+  `min`/`max` (`ACCESSOR_BOUNDS_REQUIRED`); builder-made primitives always do.
+
 ## 0.8.0
 
 Buffer and view hardening (groundwork for the Buffers, Buffer Views and Accessors rows; no row

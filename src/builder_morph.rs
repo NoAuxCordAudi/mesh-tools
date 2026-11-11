@@ -8,7 +8,7 @@
 //! primitives of one mesh must have the same number of targets.
 
 use crate::builder::GltfBuilder;
-use crate::constants::{buffer_view_target::ARRAY_BUFFER, component_type};
+use crate::accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget};
 use crate::error::{GltfError, Result};
 use crate::models::Primitive;
 use std::collections::HashMap;
@@ -96,16 +96,13 @@ impl GltfBuilder {
         let mut maps = Vec::with_capacity(targets.len());
         for target in targets {
             let mut map = HashMap::new();
+            let spec = AccessorSpec::new().with_target(BufferViewTarget::ArrayBuffer);
             if let Some(d) = &target.positions {
-                let (min, max) = component_bounds(d);
-                let bytes: Vec<u8> = d.iter().flat_map(|v| v.to_le_bytes()).collect();
-                let acc = self.write_attribute(&bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", Some(min), Some(max));
+                let acc = self.write_slice(d, AccessorType::Vec3, &spec.clone().with_bounds(Bounds::Compute));
                 map.insert("POSITION".to_string(), acc);
             }
             if let Some(d) = &target.normals {
-                let bytes: Vec<u8> = d.iter().flat_map(|v| v.to_le_bytes()).collect();
-                let acc = self.write_attribute(&bytes, ARRAY_BUFFER, component_type::FLOAT, vertex_count, "VEC3", None, None);
-                map.insert("NORMAL".to_string(), acc);
+                map.insert("NORMAL".to_string(), self.write_slice(d, AccessorType::Vec3, &spec));
             }
             maps.push(map);
         }
@@ -252,19 +249,6 @@ pub(crate) fn validate_weights_and_names(m: usize, weights: Option<&[f32]>, name
         }
     }
     Ok(())
-}
-
-/// Per-component (x, y, z) minimum and maximum of flat xyz triples. Input is non-empty.
-fn component_bounds(deltas: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mut min = vec![f32::INFINITY; 3];
-    let mut max = vec![f32::NEG_INFINITY; 3];
-    for v in deltas.chunks_exact(3) {
-        for c in 0..3 {
-            min[c] = min[c].min(v[c]);
-            max[c] = max[c].max(v[c]);
-        }
-    }
-    (min, max)
 }
 
 /// Number of morph targets shared by all primitives. Errors if there are no primitives, a

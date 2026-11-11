@@ -231,7 +231,7 @@ fn primitive_and_accessor_errors() {
     b.create_box(1.0);
     b.gltf.accessors.as_mut().unwrap()[0].count += 1000;
     assert_error(&b, "ACCESSOR_RANGE");
-    b.gltf.accessors.as_mut().unwrap()[0].buffer_view = 999;
+    b.gltf.accessors.as_mut().unwrap()[0].buffer_view = Some(999);
     assert_error(&b, "ACCESSOR_BUFFER_VIEW_INVALID");
 
     let mut b = GltfBuilder::new();
