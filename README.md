@@ -9,6 +9,7 @@ A Rust library for creating, manipulating, and exporting 3D meshes with support 
 - Material creation with PBR properties (base color, metallic, roughness, emissive)
 - Scene hierarchy and node transformation support
 - Export to spec-conformant binary GLB (chunk alignment and padding handled); the document is validated first
+- Perspective and orthographic cameras (see [docs/CAMERAS.md](docs/CAMERAS.md))
 - Skinning and keyframe animation (see [docs/SKINNING.md](docs/SKINNING.md))
 - Morph targets (blend shapes) with weights animation (see [docs/MORPH_TARGETS.md](docs/MORPH_TARGETS.md))
 - Vertex attributes: positions, normals, multiple UV sets, and skinning joints/weights
@@ -113,7 +114,7 @@ The library exports GLB (binary glTF) and validates the document before writing 
 ## Validation
 
 Besides the built-in `validate()`, the test corpus is checked against the Khronos glTF-Validator
-in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
+in CI. The Khronos corpus has not been run locally (the validator cannot be executed in the development sandbox), so the Full rows do not claim "corpus clean"; the in-crate validator and the independent `gltf` crate read-back are what the tests enforce. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
 
 ## Math Types and Compatibility Layer
 
@@ -189,7 +190,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | **Core** |||||
 | | Asset Information | ✅ Full | `version` 2.0, `generator` (settable or omitted), `copyright`, `minVersion`, and asset `extensions`/`extras`, with validation; see docs/EXTENSIONS.md |
 | | Scenes | ✅ Full | Multiple scenes, `add_scene_checked` (non-empty, unique, root nodes only), `add_node_to_scene`, `set_default_scene`/`clear_default_scene` (the first scene is the default until changed), scene `extras`/`extensions`; validated; see docs/SCENES.md |
-| | Nodes | ⚠️ Partial | Hierarchies, TRS (`set_node_transform`) or `matrix` (`add_node_with_matrix`, `set_node_matrix`, `clear_node_matrix`, `matrix_from_trs`; never both, mirrors allowed, shear warned); morph target `weights`; node `extras`/`extensions`; validated; see docs/NODES.md. No camera reference (no Cameras API) |
+| | Nodes | ✅ Full | Hierarchies, TRS (`set_node_transform`) or `matrix` (`add_node_with_matrix`, `set_node_matrix`, `clear_node_matrix`, `matrix_from_trs`; never both, mirrors allowed, shear warned); morph target `weights`; node camera reference (`set_node_camera`, `clear_node_camera`); node `extras`/`extensions`; validated; see docs/NODES.md. The `skin` and `mesh` references are set by the skinned-node and mesh builders |
 | | Buffers | ⚠️ Partial | Single buffer (created on first data write), exported as the GLB BIN chunk (`export_glb`), a base64 data URI (`export_gltf_embedded`, `to_gltf_string_embedded`) or an external `.bin` (`export_gltf`, atomic), or as parts (`to_gltf_parts`); `BUFFER_URI_*` validation; see docs/BUFFERS.md. No multiple buffers; extras/extensions: see the Custom Extensions row |
 | | Buffer Views | ⚠️ Partial | `target` and `byteStride`: `add_data_view` for raw views, `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); validated. Single buffer only (`buffer` is always 0) |
 | | Accessors | ✅ Full | Typed writer for every component type (`i8`..`f32`) and accessor type (SCALAR..MAT4, padded columns), `normalized`, computed or explicit `min`/`max` (exact for integers), `byteOffset` into shared views, zero accessors (no `bufferView`) and sparse accessors (`u8`/`u16`/`u32` indices, optional zero base); validated; see docs/ACCESSORS.md. extras/extensions: see the Custom Extensions row |
@@ -210,13 +211,13 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
 | | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights |
 | **Cameras** |||||
-| | Cameras | ❌ None | Not yet implemented |
+| | Cameras | ✅ Full | Perspective (`add_perspective_camera`: optional `zfar` for an infinite far plane, optional `aspectRatio`) and orthographic (`add_orthographic_camera`) cameras, node references, camera/projection `extras`/`extensions`; ranges validated (`CAMERA_*`); see docs/CAMERAS.md |
 | **Extensions** |||||
 | | KHR_materials_pbrSpecularGlossiness | ✅ Full (write-only, deprecated upstream) | Factors, both textures with per-slot `texCoord`, `extensionsUsed` registration (never required), optional metallic-roughness fallback, `SG_*` validation. Superseded by `KHR_materials_specular` + `KHR_materials_ior` (not implemented) |
 | | KHR_materials_unlit | ❌ None | Not yet implemented |
 | | KHR_texture_transform | ❌ None | Not yet implemented |
 | | KHR_mesh_quantization | ❌ None | Not yet implemented |
-| | Custom Extensions | ⚠️ Partial | Opaque-JSON `extensions` and `extras` through `set_extension`/`set_extras` on the root, asset, scenes, nodes, meshes, primitives, materials, textures, images, samplers, accessors, buffer views, buffers, skins and animations (with channels and samplers), plus `extensionsUsed`/`extensionsRequired` bookkeeping. Not yet reachable: texture-info structs, camera and sparse objects (not modelled) |
+| | Custom Extensions | ⚠️ Partial | Opaque-JSON `extensions` and `extras` through `set_extension`/`set_extras` on the root, asset, scenes, nodes, meshes, primitives, materials, textures, images, samplers, accessors, buffer views, buffers, skins and animations (with channels and samplers), plus `extensionsUsed`/`extensionsRequired` bookkeeping. Not yet reachable: texture-info structs and sparse objects (not modelled); cameras and their projection objects are reachable |
 
 ### Legend
 

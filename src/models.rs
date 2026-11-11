@@ -18,6 +18,7 @@ pub type Extensions = serde_json::Map<String, serde_json::Value>;
 /// A glTF document contains all the resources and metadata needed to represent a 3D scene or model.
 /// It includes scenes, nodes, meshes, materials, textures, and binary data references.
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
 pub struct Gltf {
     pub asset: Asset,
     
@@ -57,6 +58,10 @@ pub struct Gltf {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skins: Option<Vec<Skin>>,
+
+    /// Cameras referenced by nodes. Stays `None` until the first camera is added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cameras: Option<Vec<Camera>>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub animations: Option<Vec<Animation>>,
@@ -133,6 +138,10 @@ pub struct Node {
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skin: Option<usize>,
+
+    /// Index into `Gltf.cameras`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<usize>,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub translation: Option<[f32; 3]>,
@@ -722,6 +731,75 @@ pub struct Skin {
     /// Index of the skeleton node (root joint)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skeleton: Option<usize>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// A camera. `type_` is `"perspective"` or `"orthographic"` and selects which of the two
+/// projection objects must be present (and the other absent).
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[non_exhaustive]
+pub struct Camera {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    #[serde(rename = "type")]
+    pub type_: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<Perspective>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orthographic: Option<Orthographic>,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// Perspective projection. `yfov` is the vertical field of view in radians.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[non_exhaustive]
+pub struct Perspective {
+    /// Width over height. When absent, the viewport's aspect ratio is used.
+    #[serde(rename = "aspectRatio", skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<f32>,
+
+    pub yfov: f32,
+
+    /// Far plane distance. When absent the projection has an infinite far plane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zfar: Option<f32>,
+
+    pub znear: f32,
+
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// Orthographic projection. `xmag` and `ymag` are the half-width and half-height of the view.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[non_exhaustive]
+pub struct Orthographic {
+    pub xmag: f32,
+    pub ymag: f32,
+    pub zfar: f32,
+    pub znear: f32,
 
     /// Extension payloads keyed by extension name (opaque JSON).
     #[serde(skip_serializing_if = "Option::is_none")]

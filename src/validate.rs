@@ -134,6 +134,7 @@ impl GltfBuilder {
         doc.check_skins(&parents, &mut r);
         doc.check_skinned_nodes(&mut r);
         doc.check_animations(&mut r);
+        doc.check_cameras(&mut r);
         doc.check_textures(&mut r);
         doc.check_materials(&mut r);
         r
@@ -1111,6 +1112,80 @@ impl<'a> Doc<'a> {
                 sampler.output,
                 output.count
             ));
+        }
+    }
+
+    /// Cameras (glTF 3.12): projection type and objects, value ranges, node references.
+    fn check_cameras(&self, r: &mut ValidationReport) {
+        use crate::builder_camera::positive;
+        let cameras = self.b.gltf.cameras.as_deref().unwrap_or(&[]);
+        let mut used = vec![false; cameras.len()];
+        for (ni, node) in self.nodes.iter().enumerate() {
+            let Some(c) = node.camera else { continue };
+            match used.get_mut(c) {
+                Some(u) => *u = true,
+                None => r.errors.push(format!(
+                    "NODE_CAMERA_INVALID: node {ni} references camera {c} ({} cameras)", cameras.len()
+                )),
+            }
+        }
+        for (i, c) in cameras.iter().enumerate() {
+            let e = &mut r.errors;
+            match c.type_.as_str() {
+                "perspective" | "orthographic" => {
+                    let (this, other) = if c.type_ == "perspective" {
+                        (c.perspective.is_some(), c.orthographic.is_some())
+                    } else {
+                        (c.orthographic.is_some(), c.perspective.is_some())
+                    };
+                    if !this || other {
+                        e.push(format!(
+                            "CAMERA_TYPE_MISMATCH: camera {i} has type {:?} but perspective is {} and orthographic is {}",
+                            c.type_,
+                            if c.perspective.is_some() { "present" } else { "absent" },
+                            if c.orthographic.is_some() { "present" } else { "absent" },
+                        ));
+                    }
+                }
+                t => e.push(format!("CAMERA_TYPE_INVALID: camera {i} type {t:?} is not \"perspective\" or \"orthographic\"")),
+            }
+            // A mismatched camera is still checked through whichever projection objects exist.
+            if let Some(p) = &c.perspective {
+                if !positive(p.yfov) {
+                    e.push(format!("CAMERA_YFOV_INVALID: camera {i} yfov {} must be finite and > 0", p.yfov));
+                } else if p.yfov >= std::f32::consts::PI {
+                    r.warnings.push(format!("CAMERA_YFOV_TOO_LARGE: camera {i} yfov {} is at least pi", p.yfov));
+                }
+                let e = &mut r.errors;
+                if let Some(a) = p.aspect_ratio.filter(|&a| !positive(a)) {
+                    e.push(format!("CAMERA_ASPECT_RATIO_INVALID: camera {i} aspectRatio {a} must be finite and > 0"));
+                }
+                if !positive(p.znear) {
+                    e.push(format!("CAMERA_ZNEAR_INVALID: camera {i} znear {} must be finite and > 0", p.znear));
+                }
+                if let Some(z) = p.zfar.filter(|&z| !(z.is_finite() && z > 0.0 && (!p.znear.is_finite() || z > p.znear))) {
+                    e.push(format!("CAMERA_ZFAR_INVALID: camera {i} zfar {z} must be finite and > znear {}", p.znear));
+                }
+            }
+            if let Some(o) = &c.orthographic {
+                for (code, what, v) in [("CAMERA_XMAG_INVALID", "xmag", o.xmag), ("CAMERA_YMAG_INVALID", "ymag", o.ymag)] {
+                    if !v.is_finite() || v == 0.0 {
+                        r.errors.push(format!("{code}: camera {i} {what} {v} must be finite and not 0"));
+                    } else if v < 0.0 {
+                        r.warnings.push(format!("CAMERA_MAG_NEGATIVE: camera {i} {what} {v} is negative and mirrors the view"));
+                    }
+                }
+                let e = &mut r.errors;
+                if !(o.znear.is_finite() && o.znear >= 0.0) {
+                    e.push(format!("CAMERA_ZNEAR_INVALID: camera {i} znear {} must be finite and >= 0", o.znear));
+                }
+                if !(o.zfar.is_finite() && o.zfar > 0.0 && (!o.znear.is_finite() || o.zfar > o.znear)) {
+                    e.push(format!("CAMERA_ZFAR_INVALID: camera {i} zfar {} must be finite and > znear {}", o.zfar, o.znear));
+                }
+            }
+            if !used[i] {
+                r.warnings.push(format!("CAMERA_UNUSED: camera {i} is not referenced by any node"));
+            }
         }
     }
 

@@ -331,6 +331,56 @@ fn primitive_modes_doc() -> GltfBuilder {
     scene_of(b, m)
 }
 
+/// Perspective cameras (finite and infinite far plane) on nodes looking down -Z.
+fn cameras_perspective_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let mesh = b.create_box(1.0);
+    let boxn = b.add_node(Some("Box".into()), Some(mesh), None, None, None);
+    let mut nodes = vec![boxn];
+    let finite = b.add_perspective_camera(Some("Finite".into()), 0.8, 0.1, Some(100.0), Some(1.5)).unwrap();
+    let infinite = b.add_perspective_camera(None, 1.0, 0.25, None, None).unwrap();
+    for (i, c) in [finite, infinite].into_iter().enumerate() {
+        let n = b.add_node(None, None, Some([i as f32, 0.0, 5.0]), None, None);
+        b.set_node_camera(n, c).unwrap();
+        nodes.push(n);
+    }
+    b.add_scene(None, Some(nodes));
+    b
+}
+
+/// An orthographic camera under a rotated parent, so it follows the node hierarchy.
+fn cameras_orthographic_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let mesh = b.create_box(1.0);
+    let boxn = b.add_node(None, Some(mesh), None, None, None);
+    let q = GltfBuilder::quaternion_from_euler(0.0, 0.5, 0.0);
+    let rig = b.add_node(Some("Rig".into()), None, None, Some(q), None);
+    let cam = b.add_orthographic_camera(Some("Ortho".into()), 2.0, 1.0, 0.0, 50.0).unwrap();
+    let cn = b.add_node(None, None, Some([0.0, 0.0, 5.0]), None, None);
+    b.set_node_camera(cn, cam).unwrap();
+    b.add_child_to_node(rig, cn).unwrap();
+    b.add_scene(None, Some(vec![boxn, rig]));
+    b
+}
+
+/// Camera extras on the camera and both projection objects, and a camera on a mesh node.
+fn cameras_extras_doc() -> GltfBuilder {
+    use mesh_tools::ExtensionTarget as T;
+    let mut b = GltfBuilder::new();
+    let mesh = b.create_box(1.0);
+    let p = b.add_perspective_camera(None, 0.5, 0.1, Some(10.0), None).unwrap();
+    let o = b.add_orthographic_camera(None, 1.0, 1.0, 0.1, 10.0).unwrap();
+    let n = b.add_node(None, Some(mesh), None, None, None);
+    b.set_node_camera(n, p).unwrap();
+    let n2 = b.add_node(None, None, Some([0.0, 0.0, 3.0]), None, None);
+    b.set_node_camera(n2, o).unwrap();
+    for t in [T::Camera(p), T::CameraPerspective(p), T::Camera(o), T::CameraOrthographic(o)] {
+        b.set_extras(t, serde_json::json!({ "k": 1 })).unwrap();
+    }
+    b.add_scene(None, Some(vec![n, n2]));
+    b
+}
+
 fn corpus() -> Vec<(&'static str, GltfBuilder)> {
     let mut simple = GltfBuilder::new();
     let m = simple.create_box(1.0);
@@ -353,6 +403,9 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("extensions", extensions_doc()),
         ("sparse", sparse_doc()),
         ("primitive_modes", primitive_modes_doc()),
+        ("cameras_perspective", cameras_perspective_doc()),
+        ("cameras_orthographic", cameras_orthographic_doc()),
+        ("cameras_extras", cameras_extras_doc()),
     ]
 }
 
@@ -416,6 +469,10 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
     assert_eq!(g.document.skins().next().unwrap().joints().count(), 2);
     let g = common::parse_glb(&primitives_doc());
     assert_eq!(g.document.meshes().count(), 7);
+    let g = common::parse_glb(&cameras_perspective_doc());
+    assert_eq!(g.document.cameras().count(), 2);
+    let g = common::parse_glb(&cameras_orthographic_doc());
+    assert_eq!(g.document.cameras().next().unwrap().name(), Some("Ortho"));
 }
 
 #[test]
@@ -681,6 +738,14 @@ fn negatives() -> Vec<Negative> {
     let mut b = pbr_slots_doc();
     b.gltf.meshes.as_mut().unwrap()[0].primitives[0].attributes.remove("TEXCOORD_1");
     v.push(Negative { name: "material texcoord missing", doc: b, crate_code: "MATERIAL_TEXCOORD_MISSING", khronos_code: "MESH_PRIMITIVE_TOO_FEW_TEXCOORDS" });
+
+    let mut b = cameras_perspective_doc();
+    b.gltf.nodes.as_mut().unwrap()[1].camera = Some(99);
+    v.push(Negative { name: "node camera dangling", doc: b, crate_code: "NODE_CAMERA_INVALID", khronos_code: "UNRESOLVED_REFERENCE" });
+
+    let mut b = cameras_perspective_doc();
+    b.gltf.cameras.as_mut().unwrap()[0].perspective.as_mut().unwrap().zfar = Some(0.05);
+    v.push(Negative { name: "camera zfar below znear", doc: b, crate_code: "CAMERA_ZFAR_INVALID", khronos_code: "CAMERA_ZFAR_LEQUAL_ZNEAR" });
 
     v
 }

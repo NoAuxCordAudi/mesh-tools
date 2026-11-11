@@ -87,6 +87,12 @@ Documents broken through the public `gltf` field must be rejected by both valida
 | Accessor past its buffer view | `ACCESSOR_RANGE` | `ACCESSOR_TOO_LONG` |
 | Scene references a missing node | `SCENE_NODE_INVALID` | `UNRESOLVED_REFERENCE` |
 | Primitive references a missing material | `PRIMITIVE_MATERIAL_INVALID` | `UNRESOLVED_REFERENCE` |
+| Node references a missing camera | `NODE_CAMERA_INVALID` | `UNRESOLVED_REFERENCE` |
+| Camera `zfar` not beyond `znear` | `CAMERA_ZFAR_INVALID` | `CAMERA_ZFAR_LEQUAL_ZNEAR` |
+
+Other camera codes (see [CAMERAS.md](CAMERAS.md)) have no negative cross-check. Severities
+follow the spec text: the Khronos validator may report some of them (zero `xmag`/`ymag`, negative
+magnitudes, a large `yfov`, an unused camera) at a different severity, which the CI run will show.
 
 Extension and asset codes (`ASSET_*`, `EXTENSION_*`, `EXTENSIONS_*`) are listed in
 [EXTENSIONS.md](EXTENSIONS.md); the Khronos validator reports the same problems as

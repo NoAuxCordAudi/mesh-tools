@@ -34,7 +34,9 @@ assert!(err.contains("NODE_MATRIX_NOT_AFFINE"));
 - Skins: `compute_inverse_bind_matrices` uses a joint's matrix. A joint with `matrix` translate
   (0, 1, 0) gets an inverse bind matrix translate (0, -1, 0). A matrix joint cannot have TRS
   animation.
-- Camera references are not supported (there is no camera API), so the README keeps Nodes Partial.
+- Cameras: `set_node_camera` attaches a camera and refuses a node that already has one;
+  `clear_node_camera` is the explicit way to replace it (see [CAMERAS.md](CAMERAS.md)). Both are
+  atomic. A camera does not conflict with a mesh, matrix or TRS on the same node.
 
 ## Validator codes
 
@@ -49,6 +51,7 @@ assert!(err.contains("NODE_MATRIX_NOT_AFFINE"));
 | `NODE_ROTATION_NOT_UNIT` | error | quaternion length differs from 1 by more than 5e-6 |
 | `NODE_SCALE_ZERO` | warning | a scale component is exactly 0 |
 | `NODE_CHILDREN_EMPTY` | error | `children` present but empty |
+| `NODE_CAMERA_INVALID` | error | `camera` index does not exist |
 
 The builder's `add_node*` functions normalize rotations, so the new TRS errors only affect
 hand-edited documents.

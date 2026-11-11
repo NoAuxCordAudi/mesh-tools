@@ -34,6 +34,11 @@ pub enum ExtensionTarget {
     Animation(usize),
     AnimationChannel { animation: usize, channel: usize },
     AnimationSampler { animation: usize, sampler: usize },
+    Camera(usize),
+    /// `cameras[i].perspective`; the camera must have one.
+    CameraPerspective(usize),
+    /// `cameras[i].orthographic`; the camera must have one.
+    CameraOrthographic(usize),
 }
 
 fn invalid(msg: String) -> GltfError {
@@ -98,6 +103,15 @@ impl GltfBuilder {
             T::Buffer(i) => plain!(item!(g.buffers, i, "buffer")),
             T::Skin(i) => plain!(item!(g.skins, i, "skin")),
             T::Animation(i) => plain!(item!(g.animations, i, "animation")),
+            T::Camera(i) => plain!(item!(g.cameras, i, "camera")),
+            T::CameraPerspective(i) => {
+                let c = item!(g.cameras, i, "camera");
+                plain!(c.perspective.as_mut().ok_or_else(|| invalid(format!("camera {i} has no perspective")))?)
+            }
+            T::CameraOrthographic(i) => {
+                let c = item!(g.cameras, i, "camera");
+                plain!(c.orthographic.as_mut().ok_or_else(|| invalid(format!("camera {i} has no orthographic")))?)
+            }
             T::AnimationChannel { animation, channel } => {
                 plain!(item!(item!(g.animations, animation, "animation").channels, channel, "channel"))
             }

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.17.0
+
+Cameras. The README Cameras and Nodes rows are now Full. Output of documents that use no camera
+is byte-identical to 0.16.1 (the `cameras` key is omitted).
+
+### Added
+- Model: `Gltf.cameras`, `Node.camera`, and `Camera`, `Perspective`, `Orthographic`
+  (all `#[non_exhaustive]`).
+- Builders: `add_perspective_camera`, `add_orthographic_camera`, `set_node_camera` (refuses a
+  node that already has a camera), `clear_node_camera`.
+- `ExtensionTarget::{Camera, CameraPerspective, CameraOrthographic}`.
+- Validator errors: `CAMERA_TYPE_INVALID`, `CAMERA_TYPE_MISMATCH`, `CAMERA_YFOV_INVALID`,
+  `CAMERA_ASPECT_RATIO_INVALID`, `CAMERA_ZNEAR_INVALID`, `CAMERA_ZFAR_INVALID`,
+  `CAMERA_XMAG_INVALID`, `CAMERA_YMAG_INVALID`, `NODE_CAMERA_INVALID`; warnings
+  `CAMERA_YFOV_TOO_LARGE`, `CAMERA_MAG_NEGATIVE`, `CAMERA_UNUSED`. docs/CAMERAS.md (doctested).
+
+### Breaking
+- `Gltf` is now `#[non_exhaustive]`: struct-literal construction of `Gltf` outside this crate no
+  longer compiles. Migration: `Gltf { asset, ..Default::default() }`, which also keeps future
+  fields from breaking you. Field access and `GltfBuilder::gltf` are unaffected.
+- `Node` was already `#[non_exhaustive]`, so the new `Node.camera` field breaks nothing.
+
+### Not implemented
+- `NODE_CAMERA_SCALED` (a scaled or sheared camera node) is not checked.
+
 ## 0.16.1
 
 ### Fixed
