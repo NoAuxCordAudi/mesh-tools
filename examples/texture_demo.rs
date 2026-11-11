@@ -49,17 +49,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bw_checker_material = builder.create_textured_material(
         Some("Black & White Checker Material".to_string()),
         bw_checker_texture
-    );
+    )?;
     
     let blue_checker_material = builder.create_textured_material(
         Some("Blue Checker Material".to_string()),
         blue_checker_texture
-    );
+    )?;
     
     let uv_test_material = builder.create_textured_material(
         Some("UV Test Material".to_string()),
         uv_test_texture
-    );
+    )?;
     
     // Create box meshes with different materials
     let red_box_mesh = builder.create_box_with_material(1.0, Some(red_material));

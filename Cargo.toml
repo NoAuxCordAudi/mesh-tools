@@ -1,16 +1,16 @@
 [package]
 name = "mesh-tools"
-version = "0.4.0"
+version = "0.22.0"
 edition = "2021"
 authors = ["Michael Blazej"]
 description = "A Rust library for generating 3D meshes and exporting them to glTF/GLB files"
 license = "MIT"
 repository = "https://github.com/michaelblazej/mesh-tools"
 homepage = "https://github.com/michaelblazej/mesh-tools"
-documentation = "https://docs.rs/mesh-tools/0.4.0/mesh_tools/"
+documentation = "https://docs.rs/mesh-tools/0.9.0/mesh_tools/"
 keywords = ["gltf", "3d", "mesh", "export", "graphics"]
 categories = ["graphics", "rendering", "game-development", "simulation"]
-include = ["src/**/*.rs", "Cargo.toml", "LICENSE"]
+include = ["src/**/*.rs", "docs/*.md", "Cargo.toml", "LICENSE", "README.md", "CHANGELOG.md"]
 
 [dependencies]
 # For serializing/deserializing JSON
@@ -59,3 +59,21 @@ path = "examples/instancing_demo.rs"
 [[example]]
 name = "terrain_demo"
 path = "examples/terrain_demo.rs"
+
+[[example]]
+name = "animation_demo"
+path = "examples/animation_demo.rs"
+
+[[example]]
+name = "skeletal_animation_demo"
+path = "examples/skeletal_animation_demo.rs"
+
+[[example]]
+name = "morph_demo"
+path = "examples/morph_demo.rs"
+
+[dev-dependencies]
+# Independent reference loader used by integration tests to read exported GLBs back
+# The extra features let tests read extras, extension payloads and (deprecated) specular-glossiness
+# and texture-transform data back, for the milestones that write them.
+gltf = { version = "1", features = ["extras", "extensions", "names", "KHR_materials_pbrSpecularGlossiness", "KHR_texture_transform"] }

@@ -31,10 +31,11 @@ use crate::builder_primitives::Triangle;
 /// * `width` - Width of the plane along X axis
 /// * `depth` - Depth of the plane along Z axis 
 /// * `width_segments` - Number of subdivisions along width
-/// * `depth_segments` - Number of subdivisions along depth
+/// * `depth_segments` - Number of subdivisions along depth (segment counts below 1 are raised to 1)
 /// 
 /// # Returns
-/// Tuple of (positions, indices, normals, uvs)
+/// Tuple of (positions, indices, normals, uvs). The plane faces +Y: triangles are
+/// counter-clockwise seen from above, matching the +Y normals.
 pub fn generate_plane(
     width: f32,
     depth: f32,
@@ -44,13 +45,8 @@ pub fn generate_plane(
     let width_half = width / 2.0;
     let depth_half = depth / 2.0;
     
-    let grid_x = width_segments;
-    let grid_z = depth_segments;
-    
-    // Segment dimensions not actually used directly in this implementation
-    // but kept for clarity and possible future enhancements
-    let _segment_width = width / grid_x as f32;
-    let _segment_depth = depth / grid_z as f32;
+    let grid_x = width_segments.max(1);
+    let grid_z = depth_segments.max(1);
     
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -88,9 +84,9 @@ pub fn generate_plane(
             let c = ((z + 1) * vertices_per_row + x + 1) as u32;
             let d = ((z + 1) * vertices_per_row + x) as u32;
             
-            // Two triangles per grid cell
-            indices.push(Triangle::new(a, b, d));
-            indices.push(Triangle::new(b, c, d));
+            // Counter-clockwise seen from +Y
+            indices.push(Triangle::new(a, d, b));
+            indices.push(Triangle::new(b, d, c));
         }
     }
     
@@ -198,8 +194,8 @@ pub fn generate_cylinder(
     let mut uvs = Vec::new();
     let mut indices = Vec::new();
     
-    // Helper function to calculate slope normals
-    let get_slope_normal = |_radius: f32, slope_factor: f32, u: f32| -> (f32, f32, f32) {
+    // Outward side normal at angle fraction `u`: (cosθ, slope, sinθ), normalized.
+    let get_slope_normal = |slope_factor: f32, u: f32| -> (f32, f32, f32) {
         let sin_theta = (u * 2.0 * PI).sin();
         let cos_theta = (u * 2.0 * PI).cos();
         
@@ -213,12 +209,10 @@ pub fn generate_cylinder(
         (nx / length, ny / length, nz / length)
     };
     
-    // Calculate slope factor for cylinder sides
-    let slope_factor = if radius_top == radius_bottom {
-        0.0 // No slope for a perfect cylinder
-    } else {
-        height / (radius_bottom - radius_top)
-    };
+    // Slope term of the outward normal. The surface tangent in the (radius, y) plane is
+    // (radius_top - radius_bottom, height), so the outward normal is proportional to
+    // (height, radius_bottom - radius_top) there, i.e. y = (radius_bottom - radius_top) / height.
+    let slope_factor = (radius_bottom - radius_top) / height;
     
     // Generate vertices for the curved surface
     for y in 0..=height_segments {
@@ -237,7 +231,7 @@ pub fn generate_cylinder(
             positions.push(crate::compat::point3::new(radius * cos_theta, y_pos, radius * sin_theta));
             
             // Normal
-            let (nx, ny, nz) = get_slope_normal(radius, slope_factor, u);
+            let (nx, ny, nz) = get_slope_normal(slope_factor, u);
             normals.push(crate::compat::vector3::new(nx, ny, nz));
             
             // UV
@@ -256,13 +250,21 @@ pub fn generate_cylinder(
             let d = ((y + 1) * vertices_per_row + x) as u32;
             
             // Two triangles per grid cell
-            indices.push(Triangle::new(a, d, b));
-            indices.push(Triangle::new(b, d, c));
+            // Counter-clockwise when seen from outside the surface. A ring with zero radius
+            // collapses to a point; the triangle that would have two coincident corners is
+            // skipped instead of emitting a zero-area face.
+            if !(y == 0 && radius_bottom == 0.0) {
+                indices.push(Triangle::new(a, d, b));
+            }
+            if !(y == height_segments - 1 && radius_top == 0.0) {
+                indices.push(Triangle::new(b, d, c));
+            }
         }
     }
     
-    // If not open ended, add top and bottom caps
-    if !open_ended {
+    // If not open ended, add top and bottom caps. A cap whose radius is zero (the apex of a
+    // cone) would be made of zero-area triangles, so it is skipped.
+    if !open_ended && radius_top > 0.0 {
         let start_index = positions.len();
         
         // Top cap
@@ -301,9 +303,11 @@ pub fn generate_cylinder(
                 center_index + (x + 1) as u32
             ));
         }
-        
+    }
+
+    if !open_ended && radius_bottom > 0.0 {
         // Bottom cap
-        let start_index_bottom = positions.len();
+        let start_index = positions.len();
         
         // Center vertex
         positions.push(crate::compat::point3::new(0.0, -height / 2.0, 0.0));
@@ -331,7 +335,7 @@ pub fn generate_cylinder(
         }
         
         // Bottom cap indices
-        let center_index = start_index_bottom as u32;
+        let center_index = start_index as u32;
         
         for x in 0..radial_segments {
             indices.push(Triangle::new(

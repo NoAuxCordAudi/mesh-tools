@@ -1,0 +1,6 @@
+# Khronos glTF-Validator findings that are accepted on the corpus.
+# Format: CODE | reason       (one per line; the reason is mandatory)
+# Errors can never be allow-listed; only warnings. Keep this file empty unless a finding is
+# understood and deliberately accepted. See docs/VALIDATION.md.
+DATA_URI_GLB | image_data_uri and multi_buffer deliberately exercise data URIs inside a GLB (an embedded image, and extra buffers written with ExtraBuffers::DataUri); the spec allows it and Khronos only flags it as a warning. The same documents are also validated with external-file encodings.
+MULTIPLE_EXTENSIONS | extensions_everywhere deliberately attaches several extensions to one material (specular-glossiness plus an opaque vendor extension) to exercise the extension registry; the spec allows it.

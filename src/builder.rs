@@ -7,8 +7,6 @@
 //! The builder follows a fluent API pattern where methods can be chained together to
 //! build up the document structure incrementally.
 
-use std::fs::File;
-use std::io::{self, Write, Seek};
 use byteorder::{LittleEndian, WriteBytesExt};
 use serde_json;
 
@@ -23,9 +21,39 @@ use crate::models::*;
 /// - Creating scene hierarchies with nodes
 /// - Managing buffer data for vertex attributes
 /// - Exporting to glTF and GLB formats
+///
+/// # Safety Features
+/// - Prevents NODE_PARENT_OVERRIDE errors through safe hierarchy building
+/// - Automatically normalizes rotation quaternions
+/// - Provides instancing helpers for common patterns
+/// - Validates node relationships before building
 pub struct GltfBuilder {
+    /// Internal glTF document structure
+    /// 
+    /// ⚠️  **WARNING: Direct manipulation of this field is strongly discouraged!**
+    /// 
+    /// Directly modifying this structure can lead to:
+    /// - NODE_PARENT_OVERRIDE errors (nodes with multiple parents)
+    /// - ROTATION_NON_UNIT errors (non-normalized quaternions)  
+    /// - Invalid glTF files that fail validation
+    /// 
+    /// **Always use the provided API methods instead:**
+    /// - `add_node()`, `add_child_to_node()`, `create_mesh_instance()`
+    /// - `create_mesh_grid()`, `create_safe_hierarchy()`
+    /// - `normalize_quaternion()`, `quaternion_from_euler()`
+    /// 
+    /// This field is public only for internal crate modules. External users
+    /// should treat this as read-only for inspection purposes only.
+    #[doc(hidden)]  // Hide from public documentation
     pub gltf: Gltf,
-    pub buffer_data: Vec<u8>,
+    
+    /// Stored bytes per buffer; `buffer_data[i]` belongs to `gltf.buffers[i]`. A buffer past the end
+    /// has no stored bytes (e.g. one pushed directly onto `gltf.buffers` with a `uri`).
+    pub(crate) buffer_data: Vec<Vec<u8>>,
+    /// Buffer that every writer appends to.
+    pub(crate) write_buffer: usize,
+    // Track node parent relationships to prevent override errors
+    pub(crate) node_parents: Vec<Option<usize>>,
 }
 
 impl GltfBuilder {
@@ -39,6 +67,7 @@ impl GltfBuilder {
             version: "2.0".to_string(),
             generator: Some("Rust glTF Export Library".to_string()),
             copyright: None,
+            ..Default::default()
         };
         
         gltf.asset = asset;
@@ -50,36 +79,40 @@ impl GltfBuilder {
         gltf.accessors = Some(Vec::new());
         gltf.buffer_views = Some(Vec::new());
         gltf.buffers = Some(Vec::new());
+        gltf.materials = Some(Vec::new());
+        gltf.textures = Some(Vec::new());
+        gltf.images = Some(Vec::new());
+        // `animations` stays None until the first animation is added (an empty array is invalid glTF)
+        gltf.samplers = Some(Vec::new());
+        gltf.skins = Some(Vec::new());
         
-        // Create initial buffer in buffer list
-        let buffer = Buffer {
-            byte_length: 0, // Will be updated during export
-            uri: None,     // Will be embedded in GLB
-        };
-        
-        if let Some(buffers) = &mut gltf.buffers {
-            buffers.push(buffer);
-        }
+        // Buffer 0 is created lazily by the first data write (an empty buffer is invalid glTF)
         
         GltfBuilder {
             gltf,
             buffer_data: Vec::new(),
+            write_buffer: 0,
+            node_parents: Vec::new(),
         }
     }
 
-    /// Add a scene to the glTF document
+    /// Add a scene to the glTF document. The first scene added becomes the default scene.
+    ///
+    /// Nothing is checked here; see [`GltfBuilder::add_scene_checked`] for a validated variant.
     pub fn add_scene(&mut self, name: Option<String>, nodes: Option<Vec<usize>>) -> usize {
         let scene = Scene {
             name,
             nodes,
+            ..Default::default()
         };
         
         if let Some(scenes) = &mut self.gltf.scenes {
             let index = scenes.len();
             scenes.push(scene);
             
-            // Set as default scene if this is the first one
-            if self.gltf.scene.is_none() {
+            // The first scene becomes the default. Later scenes never reselect, so an
+            // explicit `clear_default_scene` is not undone.
+            if index == 0 {
                 self.gltf.scene = Some(0);
             }
             
@@ -91,56 +124,107 @@ impl GltfBuilder {
         }
     }
 
-    /// Add a node to the glTF document
+    /// Add a node to the glTF document with automatic quaternion normalization
     pub fn add_node(&mut self, name: Option<String>, mesh: Option<usize>, 
                    translation: Option<[f32; 3]>, rotation: Option<[f32; 4]>,
                    scale: Option<[f32; 3]>) -> usize {
+        // Normalize rotation quaternion if provided
+        let normalized_rotation = rotation.map(|q| Self::normalize_quaternion(q));
+        
         let node = Node {
             name,
             mesh,
+            skin: None,
+            children: None,
             translation,
-            rotation,
+            rotation: normalized_rotation,
             scale,
             matrix: None,
-            children: None,
+            ..Default::default()
         };
         
-        if let Some(nodes) = &mut self.gltf.nodes {
+        let index = if let Some(nodes) = &mut self.gltf.nodes {
             let index = nodes.len();
             nodes.push(node);
             index
         } else {
             self.gltf.nodes = Some(vec![node]);
             0
-        }
+        };
+        
+        // Track that this node has no parent initially
+        self.node_parents.push(None);
+        
+        index
     }
 
     /// Add a node with a list of children to the glTF document
+    /// This method validates that children don't already have parents to prevent NODE_PARENT_OVERRIDE errors
     pub fn add_node_with_children(&mut self, name: Option<String>, mesh: Option<usize>, 
                           translation: Option<[f32; 3]>, rotation: Option<[f32; 4]>,
-                          scale: Option<[f32; 3]>, children: Vec<usize>) -> usize {
+                          scale: Option<[f32; 3]>, children: Vec<usize>) -> Result<usize> {
+        // Validate that none of the children already have parents
+        for &child_index in &children {
+            if child_index >= self.node_parents.len() {
+                return Err(GltfError::InvalidIndex);
+            }
+            if self.node_parents[child_index].is_some() {
+                return Err(GltfError::InvalidData(
+                    format!("Node {} already has a parent. Cannot add as child to avoid NODE_PARENT_OVERRIDE error.", child_index)
+                ));
+            }
+        }
+        
+        // Normalize rotation quaternion if provided
+        let normalized_rotation = rotation.map(|q| Self::normalize_quaternion(q));
+        
         let node = Node {
             name,
             mesh,
+            skin: None,
+            children: Some(children.clone()),
             translation,
-            rotation,
+            rotation: normalized_rotation,
             scale,
             matrix: None,
-            children: Some(children),
+            ..Default::default()
         };
         
-        if let Some(nodes) = &mut self.gltf.nodes {
+        let index = if let Some(nodes) = &mut self.gltf.nodes {
             let index = nodes.len();
             nodes.push(node);
             index
         } else {
             self.gltf.nodes = Some(vec![node]);
             0
+        };
+        
+        // Track that this node has no parent initially
+        self.node_parents.push(None);
+        
+        // Update parent tracking for all children
+        for child_index in children {
+            self.node_parents[child_index] = Some(index);
         }
+        
+        Ok(index)
     }
 
-    /// Add a child to an existing node
+    /// Add a child to an existing node with parent validation
+    /// Prevents NODE_PARENT_OVERRIDE errors by checking if child already has a parent
     pub fn add_child_to_node(&mut self, parent_index: usize, child_index: usize) -> Result<()> {
+        // Validate indices
+        if parent_index >= self.node_parents.len() || child_index >= self.node_parents.len() {
+            return Err(GltfError::InvalidIndex);
+        }
+        
+        // Check if child already has a parent
+        if self.node_parents[child_index].is_some() {
+            return Err(GltfError::InvalidData(
+                format!("Node {} already has a parent. Cannot add as child to avoid NODE_PARENT_OVERRIDE error.", child_index)
+            ));
+        }
+        
         if let Some(nodes) = &mut self.gltf.nodes {
             if parent_index < nodes.len() && child_index < nodes.len() {
                 let parent = &mut nodes[parent_index];
@@ -148,9 +232,13 @@ impl GltfBuilder {
                 if let Some(children) = &mut parent.children {
                     if !children.contains(&child_index) {
                         children.push(child_index);
+                        // Update parent tracking
+                        self.node_parents[child_index] = Some(parent_index);
                     }
                 } else {
                     parent.children = Some(vec![child_index]);
+                    // Update parent tracking
+                    self.node_parents[child_index] = Some(parent_index);
                 }
                 
                 Ok(())
@@ -167,7 +255,7 @@ impl GltfBuilder {
                                parent_translation: Option<[f32; 3]>,
                                parent_rotation: Option<[f32; 4]>,
                                parent_scale: Option<[f32; 3]>,
-                               child_indices: Vec<usize>) -> usize {
+                               child_indices: Vec<usize>) -> Result<usize> {
         // Create the parent node with the children
         self.add_node_with_children(
             parent_name,
@@ -184,6 +272,7 @@ impl GltfBuilder {
         let mesh = Mesh {
             name,
             primitives,
+            ..Default::default()
         };
         
         if let Some(meshes) = &mut self.gltf.meshes {
@@ -196,40 +285,16 @@ impl GltfBuilder {
         }
     }
     
-    /// Add an accessor to the glTF document
-    pub(crate) fn add_accessor(&mut self, buffer_view: usize, component_type: usize, 
-                       count: usize, type_: String, byte_offset: Option<usize>,
-                       min: Option<Vec<f32>>, max: Option<Vec<f32>>) -> usize {
-        let accessor = Accessor {
-            buffer_view: buffer_view,
-            component_type: component_type,
-            count,
-            type_,
-            byte_offset: byte_offset,
-            min,
-            max,
-            normalized: None,
-        };
-        
-        if let Some(accessors) = &mut self.gltf.accessors {
-            let index = accessors.len();
-            accessors.push(accessor);
-            index
-        } else {
-            self.gltf.accessors = Some(vec![accessor]);
-            0
-        }
-    }
-    
     /// Add a buffer view to the glTF document
     pub(crate) fn add_buffer_view(&mut self, byte_offset: usize, byte_length: usize, 
                           target: Option<usize>) -> usize {
         let buffer_view = BufferView {
-            buffer: 0, // We only use a single buffer
+            buffer: self.write_buffer,
             byte_offset: byte_offset,
             byte_length: byte_length,
             byte_stride: None,
             target,
+            ..Default::default()
         };
         
         if let Some(buffer_views) = &mut self.gltf.buffer_views {
@@ -242,74 +307,458 @@ impl GltfBuilder {
         }
     }
     
-    /// Add binary data to the buffer and return the byte offset
+    /// Append `data` to the write buffer (4-byte aligned) and return `(byte_offset, byte_length)`.
+    /// Creates buffer 0 on first use; keeps the buffer's declared length in step with its data.
     pub(crate) fn add_buffer_data(&mut self, data: &[u8]) -> (usize, usize) {
-        // Ensure alignment to 4-byte boundary
-        while self.buffer_data.len() % 4 != 0 {
-            self.buffer_data.push(0);
+        let buffers = self.gltf.buffers.get_or_insert_with(Vec::new);
+        if buffers.is_empty() {
+            buffers.push(Buffer::default());
         }
-        
-        let byte_offset = self.buffer_data.len();
-        let byte_length = data.len();
-        
-        self.buffer_data.extend_from_slice(data);
-        
-        // Update the buffer size in the glTF model
-        if let Some(buffers) = &mut self.gltf.buffers {
-            if !buffers.is_empty() {
-                buffers[0].byte_length = self.buffer_data.len();
-            }
+        // `gltf.buffers` is public: if it was shrunk behind our back, declare the missing buffers
+        // again so the write cannot panic; validation then reports the damage.
+        if buffers.len() <= self.write_buffer {
+            buffers.resize_with(self.write_buffer + 1, Buffer::default);
         }
-        
-        (byte_offset, byte_length)
+        if self.buffer_data.len() <= self.write_buffer {
+            self.buffer_data.resize_with(self.write_buffer + 1, Vec::new);
+        }
+        let store = &mut self.buffer_data[self.write_buffer];
+        store.resize(store.len().next_multiple_of(4), 0);
+        let byte_offset = store.len();
+        store.extend_from_slice(data);
+        buffers[self.write_buffer].byte_length = store.len();
+        (byte_offset, data.len())
     }
 
-    /// Export the glTF as a GLB file
-    pub fn export_glb(&self, path: &str) -> Result<()> {
-        let mut file = File::create(path)?;
-        
-        // Write GLB header (magic, version, length)
-        file.write_all(b"glTF")?;
-        file.write_u32::<LittleEndian>(2)?; // version
-        
-        // We'll write the total length later, once we know it
-        let length_pos = file.stream_position()?;
-        file.write_u32::<LittleEndian>(0)?; // placeholder total length
-        
-        // JSON chunk
-        let json = serde_json::to_string(&self.gltf)?;
-        let json_len = json.len();
-        let json_pad = (4 - (json_len % 4)) % 4; // Padding to 4-byte boundary
-        
-        file.write_u32::<LittleEndian>((json_len + json_pad) as u32)?; // chunk length
-        file.write_u32::<LittleEndian>(0x4E4F534A)?; // chunk type "JSON"
-        file.write_all(json.as_bytes())?;
-        
-        // Add padding
-        for _ in 0..json_pad {
-            file.write_u8(0x20)?; // Space character for padding
+    /// Stored bytes of buffer `index`, or `None` if it does not exist or has no stored bytes.
+    pub fn buffer_bytes(&self, index: usize) -> Option<&[u8]> {
+        self.buffer_data.get(index).map(Vec::as_slice)
+    }
+
+    /// Append an empty buffer and return its index. Writers keep appending to the current write
+    /// buffer (initially 0); use [`set_write_buffer`](Self::set_write_buffer) or
+    /// [`add_data_view_in_buffer`](Self::add_data_view_in_buffer) to fill it.
+    ///
+    /// Buffers other than 0 cannot be the GLB BIN chunk: at export they become external files or
+    /// data URIs, chosen with [`ExtraBuffers`](crate::ExtraBuffers) (see docs/BUFFERS.md).
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if `gltf.buffers` was extended directly so that buffer indices
+    /// no longer line up with the stored bytes. The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert_eq!(b.add_buffer(Some("a".into())).unwrap(), 0);
+    /// assert_eq!(b.add_buffer(None).unwrap(), 1);
+    /// b.add_data_view_in_buffer(1, &[1, 2, 3], None, None).unwrap();
+    /// assert_eq!(b.buffer_bytes(1), Some(&[1u8, 2, 3][..]));
+    /// ```
+    pub fn add_buffer(&mut self, name: Option<String>) -> Result<usize> {
+        let n = self.gltf.buffers.as_ref().map_or(0, Vec::len);
+        if self.buffer_data.len() != n {
+            return Err(GltfError::InvalidInput(format!(
+                "{n} buffers are declared but {} hold stored bytes; buffers added directly to `gltf.buffers` cannot be mixed with add_buffer",
+                self.buffer_data.len()
+            )));
         }
+        self.gltf.buffers.get_or_insert_with(Vec::new).push(Buffer { name, ..Default::default() });
+        self.buffer_data.push(Vec::new());
+        Ok(n)
+    }
+
+    /// Make `index` the buffer that all following writers (accessors, images, geometry) append to.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the buffer does not exist or has no stored bytes. The write
+    /// buffer is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert!(b.set_write_buffer(0).is_err()); // no buffer yet
+    /// b.add_buffer(None).unwrap();
+    /// b.add_buffer(None).unwrap();
+    /// b.set_write_buffer(1).unwrap();
+    /// b.create_box(1.0);
+    /// assert!(b.buffer_bytes(0).unwrap().is_empty() && !b.buffer_bytes(1).unwrap().is_empty());
+    /// ```
+    pub fn set_write_buffer(&mut self, index: usize) -> Result<()> {
+        if index >= self.buffer_data.len() {
+            return Err(GltfError::InvalidInput(format!(
+                "buffer {index} does not exist or has no stored bytes ({} writable)", self.buffer_data.len()
+            )));
+        }
+        self.write_buffer = index;
+        Ok(())
+    }
+
+    /// Set or clear the `name` of buffer `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the buffer does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert!(b.set_buffer_name(0, Some("geometry".into())).is_err()); // no buffer yet
+    /// b.create_box(1.0);
+    /// b.set_buffer_name(0, Some("geometry".into())).unwrap();
+    /// ```
+    pub fn set_buffer_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.buffers.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.buffers.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("buffer {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
+    }
+
+    /// Set or clear the `name` of buffer view `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the buffer view does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// b.create_box(1.0);
+    /// b.set_buffer_view_name(0, Some("positions".into())).unwrap();
+    /// assert!(b.set_buffer_view_name(999, None).is_err());
+    /// ```
+    pub fn set_buffer_view_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.buffer_views.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.buffer_views.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("buffer view {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
+    }
+
+    /// Set or clear the `name` of accessor `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the accessor does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// b.create_box(1.0);
+    /// b.set_accessor_name(0, Some("POSITION".into())).unwrap();
+    /// assert!(b.set_accessor_name(999, None).is_err());
+    /// ```
+    pub fn set_accessor_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.accessors.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.accessors.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("accessor {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
+    }
+
+    /// Validate the document, then serialize it to GLB bytes.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` listing every validation error (see
+    /// [`validate`](Self::validate)), `BUFFER_GLB_EXTRA_UNRESOLVED` if the document has buffers
+    /// other than 0 (use [`to_glb_parts`](Self::to_glb_parts)), or if the GLB would exceed the
+    /// 4 GiB container limit. Use [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked) to skip validation.
+    pub fn to_glb_bytes(&self) -> Result<Vec<u8>> {
+        self.ensure_valid()?;
+        self.ensure_no_unresolved_extras()?;
+        self.to_glb_bytes_unchecked()
+    }
+
+    /// `GltfError::InvalidData` listing every validation error, if there are any.
+    pub(crate) fn ensure_valid(&self) -> Result<()> {
+        let report = self.validate();
+        if report.errors.is_empty() {
+            return Ok(());
+        }
+        Err(GltfError::InvalidData(format!(
+            "document failed validation with {} error(s):\n  - {}",
+            report.errors.len(),
+            report.errors.join("\n  - ")
+        )))
+    }
+
+    /// Serialize the document JSON, optionally setting `buffers[0].uri` in the output only.
+    pub(crate) fn serialize_json(&self, buffer_uri: Option<&str>) -> Result<String> {
+        self.serialize_json_with_uris(&[buffer_uri.map(str::to_string)])
+    }
+
+    /// Serialize the document JSON, setting `buffers[i].uri` to `uris[i]` (when `Some`) in the output only.
+    pub(crate) fn serialize_json_with_uris(&self, uris: &[Option<String>]) -> Result<String> {
+        let mut value = serde_json::to_value(&self.gltf)?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.retain(|k, v| {
+                k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
+            });
+        }
+        for (i, uri) in uris.iter().enumerate() {
+            if let Some(buffer) = uri.as_ref().and_then(|u| value.pointer_mut(&format!("/buffers/{i}")).map(|b| (b, u))) {
+                buffer.0["uri"] = serde_json::Value::String(buffer.1.clone());
+            }
+        }
+        crate::builder_accessor::write_integer_bounds_as_integers(&mut value);
+        Ok(serde_json::to_string(&value)?)
+    }
+
+    /// Serialize to GLB bytes **without** validating the document.
+    ///
+    /// Empty top-level arrays (which glTF forbids) are omitted, except `extensionsUsed` and
+    /// `extensionsRequired`, which are kept so the problem stays visible. The result may be an invalid
+    /// glTF file; this exists for deliberately producing or inspecting such documents.
+    pub fn to_glb_bytes_unchecked(&self) -> Result<Vec<u8>> {
+        glb_container(&self.serialize_json(None)?, self.buffer_data.first().map_or(&[][..], Vec::as_slice))
+    }
+
+    /// Validate the document and export it as a GLB file.
+    ///
+    /// Nothing is written if validation fails. See [`to_glb_bytes`](Self::to_glb_bytes).
+    pub fn export_glb(&self, path: &str) -> Result<()> {
+        // Serialize fully first so a failure never leaves a truncated file behind.
+        let bytes = self.to_glb_bytes()?;
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    /// Export as a GLB file **without** validating. See
+    /// [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked).
+    pub fn export_glb_unchecked(&self, path: &str) -> Result<()> {
+        let bytes = self.to_glb_bytes_unchecked()?;
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    // ========== HELPER METHODS ==========
+
+    /// Normalize a quaternion to ensure it's a unit quaternion
+    /// This prevents ROTATION_NON_UNIT glTF validation errors
+    pub fn normalize_quaternion(quat: [f32; 4]) -> [f32; 4] {
+        let magnitude = (quat[0]*quat[0] + quat[1]*quat[1] + quat[2]*quat[2] + quat[3]*quat[3]).sqrt();
+        if magnitude > 0.0 {
+            [quat[0]/magnitude, quat[1]/magnitude, quat[2]/magnitude, quat[3]/magnitude]
+        } else {
+            [0.0, 0.0, 0.0, 1.0] // Default identity quaternion
+        }
+    }
+
+    /// Create a rotation quaternion from Euler angles (in radians)
+    /// Returns a normalized quaternion ready for use in nodes
+    pub fn quaternion_from_euler(x: f32, y: f32, z: f32) -> [f32; 4] {
+        let (sx, cx) = (x * 0.5).sin_cos();
+        let (sy, cy) = (y * 0.5).sin_cos();
+        let (sz, cz) = (z * 0.5).sin_cos();
+
+        let quat = [
+            sx * cy * cz - cx * sy * sz, // x
+            cx * sy * cz + sx * cy * sz, // y
+            cx * cy * sz - sx * sy * cz, // z
+            cx * cy * cz + sx * sy * sz, // w
+        ];
+
+        Self::normalize_quaternion(quat)
+    }
+
+    /// Create a safe node instance that references a mesh at a specific position
+    /// This is the preferred way to create mesh instances to avoid parent override errors
+    pub fn create_mesh_instance(&mut self, name: Option<String>, mesh_index: usize,
+                               position: [f32; 3], rotation: Option<[f32; 4]>,
+                               scale: Option<[f32; 3]>) -> usize {
+        self.add_node(name, Some(mesh_index), Some(position), rotation, scale)
+    }
+
+    /// Create multiple instances of a mesh in a grid pattern
+    /// This is a helper for common instancing patterns
+    pub fn create_mesh_grid(&mut self, mesh_index: usize, name_prefix: &str,
+                           rows: usize, cols: usize, spacing: f32) -> Vec<usize> {
+        let mut instances = Vec::new();
         
-        // BIN chunk
-        if !self.buffer_data.is_empty() {
-            let bin_len = self.buffer_data.len();
-            let bin_pad = (4 - (bin_len % 4)) % 4; // Padding to 4-byte boundary
-            
-            file.write_u32::<LittleEndian>((bin_len + bin_pad) as u32)?; // chunk length
-            file.write_u32::<LittleEndian>(0x004E4942)?; // chunk type "BIN"
-            file.write_all(&self.buffer_data)?;
-            
-            // Add padding
-            for _ in 0..bin_pad {
-                file.write_u8(0)?;
+        for row in 0..rows {
+            for col in 0..cols {
+                let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing;
+                let z = (row as f32 - (rows as f32 - 1.0) / 2.0) * spacing;
+                
+                let instance = self.create_mesh_instance(
+                    Some(format!("{}_{}", name_prefix, row * cols + col)),
+                    mesh_index,
+                    [x, 0.0, z],
+                    None,
+                    None
+                );
+                
+                instances.push(instance);
             }
         }
         
-        // Go back and write the total length
-        let current_pos = file.stream_position()?;
-        file.seek(io::SeekFrom::Start(length_pos))?;
-        file.write_u32::<LittleEndian>(current_pos as u32)?;
-        
-        Ok(())
+        instances
     }
+
+    /// Create a hierarchical group of nodes safely
+    /// This method ensures no parent override errors by creating new instances
+    pub fn create_safe_hierarchy(&mut self, name: Option<String>,
+                                position: Option<[f32; 3]>,
+                                rotation: Option<[f32; 4]>,
+                                scale: Option<[f32; 3]>,
+                                child_meshes: Vec<(usize, [f32; 3])>) -> Result<usize> {
+        // Create child nodes first
+        let mut child_nodes = Vec::new();
+        
+        for (i, (mesh_index, child_pos)) in child_meshes.iter().enumerate() {
+            let child_name = name.as_ref().map(|n| format!("{}_child_{}", n, i));
+            let child_node = self.create_mesh_instance(
+                child_name,
+                *mesh_index,
+                *child_pos,
+                None,
+                None
+            );
+            child_nodes.push(child_node);
+        }
+        
+        // Create parent node with children
+        self.add_node_with_children(name, None, position, rotation, scale, child_nodes)
+    }
+
+    /// Validate the current node hierarchy for common glTF errors
+    /// Returns a list of validation warnings/errors
+    pub fn validate_hierarchy(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        
+        // Check for nodes with multiple parents (should be impossible with our API now)
+        let mut parent_counts = vec![0; self.node_parents.len()];
+        for parent_opt in &self.node_parents {
+            if let Some(parent) = parent_opt {
+                if *parent < parent_counts.len() {
+                    parent_counts[*parent] += 1;
+                }
+            }
+        }
+        
+        // Check for orphaned nodes (nodes not in any scene)
+        if let Some(scenes) = &self.gltf.scenes {
+            let mut nodes_in_scenes = std::collections::HashSet::new();
+            for scene in scenes {
+                if let Some(scene_nodes) = &scene.nodes {
+                    for &node_index in scene_nodes {
+                        self.collect_node_tree(node_index, &mut nodes_in_scenes);
+                    }
+                }
+            }
+            
+            if let Some(nodes) = &self.gltf.nodes {
+                for (i, _) in nodes.iter().enumerate() {
+                    if !nodes_in_scenes.contains(&i) {
+                        warnings.push(format!("Node {} is not referenced by any scene", i));
+                    }
+                }
+            }
+        }
+        
+        warnings
+    }
+    
+    /// Helper method to recursively collect all nodes in a tree
+    fn collect_node_tree(&self, node_index: usize, collected: &mut std::collections::HashSet<usize>) {
+        if collected.contains(&node_index) {
+            return;
+        }
+        
+        collected.insert(node_index);
+        
+        if let Some(nodes) = &self.gltf.nodes {
+            if let Some(node) = nodes.get(node_index) {
+                if let Some(children) = &node.children {
+                    for &child in children {
+                        self.collect_node_tree(child, collected);
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== SAFE READ-ONLY ACCESS METHODS ==========
+
+    /// Get the number of nodes in the document
+    pub fn node_count(&self) -> usize {
+        self.gltf.nodes.as_ref().map_or(0, |nodes| nodes.len())
+    }
+
+    /// Get the number of meshes in the document  
+    pub fn mesh_count(&self) -> usize {
+        self.gltf.meshes.as_ref().map_or(0, |meshes| meshes.len())
+    }
+
+    /// Get the number of materials in the document
+    pub fn material_count(&self) -> usize {
+        self.gltf.materials.as_ref().map_or(0, |materials| materials.len())
+    }
+
+    /// Get the number of scenes in the document
+    pub fn scene_count(&self) -> usize {
+        self.gltf.scenes.as_ref().map_or(0, |scenes| scenes.len())
+    }
+
+    /// Check if a node has a parent (safe way to check parent relationships)
+    pub fn node_has_parent(&self, node_index: usize) -> bool {
+        if node_index < self.node_parents.len() {
+            self.node_parents[node_index].is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Get the parent of a node (if any)
+    pub fn get_node_parent(&self, node_index: usize) -> Option<usize> {
+        if node_index < self.node_parents.len() {
+            self.node_parents[node_index]
+        } else {
+            None
+        }
+    }
+
+    /// Get a read-only reference to the internal glTF structure for inspection
+    /// 
+    /// ⚠️  **This is for READ-ONLY inspection only!**
+    /// Do not modify the returned structure - use the API methods instead.
+    pub fn inspect_gltf(&self) -> &Gltf {
+        &self.gltf
+    }
+}
+
+/// Assemble a GLB container from the JSON text and the BIN chunk (omitted when empty).
+pub(crate) fn glb_container(json: &str, bin: &[u8]) -> Result<Vec<u8>> {
+    let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
+    let json_pad = (4 - (json.len() % 4)) % 4;
+    let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
+
+    let mut out = Vec::with_capacity(12 + 8 + json.len() + json_pad + 8 + bin.len() + 3);
+    out.extend_from_slice(b"glTF");
+    out.write_u32::<LittleEndian>(2)?; // version
+    out.write_u32::<LittleEndian>(0)?; // total length, patched below
+
+    out.write_u32::<LittleEndian>(json_chunk_len)?;
+    out.write_u32::<LittleEndian>(0x4E4F534A)?; // "JSON"
+    out.extend_from_slice(json.as_bytes());
+    out.resize(out.len() + json_pad, 0x20); // pad with spaces
+
+    if !bin.is_empty() {
+        let bin_pad = (4 - (bin.len() % 4)) % 4;
+        let bin_chunk_len = u32::try_from(bin.len() + bin_pad).map_err(|_| too_large())?;
+        out.write_u32::<LittleEndian>(bin_chunk_len)?;
+        out.write_u32::<LittleEndian>(0x004E4942)?; // "BIN\0"
+        out.extend_from_slice(bin);
+        out.resize(out.len() + bin_pad, 0);
+    }
+
+    let total = u32::try_from(out.len()).map_err(|_| too_large())?;
+    out[8..12].copy_from_slice(&total.to_le_bytes());
+    Ok(out)
 }

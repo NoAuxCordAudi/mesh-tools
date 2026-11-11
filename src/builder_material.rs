@@ -54,7 +54,7 @@ impl GltfBuilder {
     /// );
     /// 
     /// // Use the material with a mesh
-    /// let cube = builder.create_box(1.0, Some(blue_metal));
+    /// let cube = builder.create_box_with_material(1.0, Some(blue_metal));
     /// ```
     pub fn add_material(&mut self, name: Option<String>, 
                         base_color: Option<[f32; 4]>,
@@ -89,6 +89,41 @@ impl GltfBuilder {
             self.gltf.materials = Some(vec![material]);
             0
         }
+    }
+
+    /// Add a finished [`Material`](crate::Material) after checking it against the document.
+    ///
+    /// Checks the context-free rules of `MaterialBuilder::try_build` plus that every texture
+    /// slot references an existing texture. The material is not stored on error. A material with
+    /// `KHR_materials_pbrSpecularGlossiness` registers it in `extensionsUsed` (once).
+    ///
+    /// # Errors
+    /// `GltfError::InvalidMaterial` with a `MATERIAL_*` code (for example
+    /// `MATERIAL_TEXTURE_INVALID`, or `SG_TEXTURE_INVALID` for a specular-glossiness slot). The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::{material::MaterialBuilder, GltfBuilder, GltfError};
+    /// let mut b = GltfBuilder::new();
+    /// // No textures exist yet, so texture 0 is a dangling reference.
+    /// let m = MaterialBuilder::new(None).with_base_color_texture(0).build();
+    /// let err = b.add_material_from(m).unwrap_err();
+    /// assert!(matches!(err, GltfError::InvalidMaterial { code: "MATERIAL_TEXTURE_INVALID", .. }));
+    /// assert_eq!(b.gltf.materials.as_ref().map_or(0, Vec::len), 0);
+    ///
+    /// let ok = b.add_material_from(MaterialBuilder::new(None).with_metallic_factor(0.5).build()).unwrap();
+    /// assert_eq!(ok, 0);
+    /// ```
+    pub fn add_material_from(&mut self, material: crate::models::Material) -> crate::error::Result<usize> {
+        let textures = self.gltf.textures.as_ref().map_or(0, |t| t.len());
+        let index = self.gltf.materials.as_ref().map_or(0, |m| m.len());
+        if let Some(i) = material::check_material(&material, Some(textures)).into_iter().find(|i| !i.warning) {
+            return Err(crate::error::GltfError::InvalidMaterial { index: Some(index), code: i.code, message: i.msg });
+        }
+        if material.extensions.as_ref().is_some_and(|e| e.pbr_specular_glossiness.is_some()) {
+            self.register_extension(crate::builder_extensions::SPEC_GLOSS);
+        }
+        self.gltf.materials.get_or_insert_with(Vec::new).push(material);
+        Ok(index)
     }
 
     /// Create a basic material with the specified color

@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.1, 0.1, 0.8, 1.0],  // Blue diffuse color
         [0.2, 0.2, 0.2],       // Low specular intensity
         0.9,                   // High glossiness
-    );
+    )?;
     
     // Gold material (yellow color with golden specular)
     let gold_material = builder.create_specular_material(
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [1.0, 0.8, 0.2, 1.0],  // Gold diffuse color
         [1.0, 0.9, 0.4],       // Gold specular color
         0.85,                  // High glossiness
-    );
+    )?;
     
     // Red plastic material (medium specular)
     let red_plastic_material = builder.create_specular_material(
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.9, 0.1, 0.1, 1.0],  // Red diffuse color
         [0.3, 0.3, 0.3],       // Medium specular intensity
         0.8,                   // High glossiness
-    );
+    )?;
     
     // Green plastic material (high specular)
     let green_plastic_material = builder.create_specular_material(
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.1, 0.8, 0.1, 1.0],  // Green diffuse color
         [0.5, 0.5, 0.5],       // High specular intensity
         0.7,                   // Medium-high glossiness
-    );
+    )?;
     
     // Chrome-like material (high specular, high glossiness)
     let chrome_material = builder.create_specular_material(
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.8, 0.8, 0.8, 1.0],  // Light gray diffuse
         [0.95, 0.95, 0.95],    // Very bright specular
         0.95,                  // Very high glossiness
-    );
+    )?;
     
     // White ceramic material (medium specular, medium glossiness)
     let white_ceramic_material = builder.create_specular_material(
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.95, 0.95, 0.95, 1.0], // White diffuse
         [0.4, 0.4, 0.4],       // Medium specular
         0.6,                   // Medium glossiness
-    );
+    )?;
     
     // Black rubber material (very low specular, low glossiness)
     let black_rubber_material = builder.create_specular_material(
@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.1, 0.1, 0.1, 1.0],  // Black diffuse
         [0.05, 0.05, 0.05],    // Very low specular
         0.2,                   // Low glossiness (rough)
-    );
+    )?;
     
     // Copper material (reddish metal)
     let copper_material = builder.create_specular_material(
@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [0.95, 0.5, 0.3, 1.0], // Copper diffuse color
         [0.98, 0.65, 0.45],    // Copper specular color
         0.85,                  // High glossiness
-    );
+    )?;
     
     // Collection of materials in the same order as positions
     let materials = [

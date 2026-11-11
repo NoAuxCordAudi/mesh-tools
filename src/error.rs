@@ -29,6 +29,14 @@ pub enum GltfError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
     
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    
+    /// A material failed a check; `code` is a stable `MATERIAL_*` validator code.
+    /// `index` is the material's index in the document, or `None` before it has one.
+    #[error("{code}: material{} {message}", index.map(|i| format!(" {i}")).unwrap_or_default())]
+    InvalidMaterial { index: Option<usize>, code: &'static str, message: String },
+
     #[error("Invalid index")]
     InvalidIndex,
     

@@ -51,13 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     
     // Create a scene and add both nodes to it
-    let main_scene = builder.add_scene(
+    // (the first scene added becomes the default scene)
+    builder.add_scene(
         Some("AnimatedScene".to_string()),
         Some(vec![static_node, animated_sphere_node])
     );
-
-    // Set as the default scene
-    builder.gltf.scene = Some(0);
 
     // Create an animation
     let orbit_animation = builder.add_animation(Some("OrbitAnimation".to_string()));
@@ -100,32 +98,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Add translation, rotation, and scale animations to the animated sphere
-    builder.create_translation_animation(
+    builder.add_translation_track(
         orbit_animation,
         animated_sphere_node,
-        timestamps.clone(),
-        translations,
+        &timestamps,
+        &translations,
         InterpolationType::Linear
-    );
+    )?;
     
-    builder.create_rotation_animation(
+    builder.add_rotation_track(
         orbit_animation,
         animated_sphere_node,
-        timestamps.clone(),
-        rotations,
+        &timestamps,
+        &rotations,
         InterpolationType::Linear
-    );
+    )?;
     
-    builder.create_scale_animation(
+    builder.add_scale_track(
         orbit_animation,
         animated_sphere_node,
-        timestamps,
-        scales,
+        &timestamps,
+        &scales,
         InterpolationType::Linear
-    );
+    )?;
     
     // Export the animated scene as a binary glTF file
-    let path = Path::new("animation_demo.glb");
+    // Optional first argument: output path (default: animation_demo.glb in the current directory)
+    let output = std::env::args().nth(1).unwrap_or_else(|| "animation_demo.glb".to_string());
+    let path = Path::new(&output);
     builder.export_glb(&path.to_str().unwrap())?;
     
     println!("Successfully exported GLB file with animations: {}", path.display());

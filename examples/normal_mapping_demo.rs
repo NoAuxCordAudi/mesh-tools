@@ -1,3 +1,4 @@
+#![allow(deprecated)] // add_textured_material is kept for this demo; new code uses MaterialBuilder
 use mesh_tools::GltfBuilder;
 use std::error::Error;
 use std::f32::consts::PI;
@@ -140,7 +141,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                  // Default alpha mode
         None,                  // No alpha cutoff
         None                   // Not necessarily double sided
-    );
+    )?;
     
     // 2. Material with the wave normal map
     let wave_material = builder.add_textured_material(
@@ -156,13 +157,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                  // Default alpha mode
         None,                  // No alpha cutoff
         None                   // Not necessarily double sided
-    );
+    )?;
     
     // 3. Material without normal map for comparison
     let flat_material = builder.create_textured_material(
         Some("FlatMaterial".to_string()),
         uv_test_texture
-    );
+    )?;
     
     // Create plane meshes using the materials
     

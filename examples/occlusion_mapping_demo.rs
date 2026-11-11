@@ -1,3 +1,4 @@
+#![allow(deprecated)] // add_textured_material is kept for this demo; new code uses MaterialBuilder
 use mesh_tools::GltfBuilder;
 use std::error::Error;
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -155,7 +156,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                      // Default alpha mode
         None,                      // No alpha cutoff
         None                       // Not necessarily double sided
-    );
+    )?;
     
     // 2. Material with grid occlusion map
     let grid_ao_material = builder.add_textured_material(
@@ -171,7 +172,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                      // Default alpha mode
         None,                      // No alpha cutoff
         None                       // Not necessarily double sided
-    );
+    )?;
     
     // 3. Material with edge occlusion map
     let edge_ao_material = builder.add_textured_material(
@@ -187,13 +188,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                      // Default alpha mode
         None,                      // No alpha cutoff
         None                       // Not necessarily double sided
-    );
+    )?;
     
     // 4. Control material with no occlusion map for comparison
     let control_material = builder.create_textured_material(
         Some("ControlMaterial".to_string()),
         checkerboard_texture
-    );
+    )?;
     
     // Create meshes for demonstration
     

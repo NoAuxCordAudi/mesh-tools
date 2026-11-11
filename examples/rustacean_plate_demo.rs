@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rustacean_material = builder.create_textured_material(
         Some("Rustacean Material".to_string()),
         rustacean_texture
-    );
+    )?;
     
     // Create a flat plate with the Rustacean texture
     let plate_mesh = builder.create_plane(

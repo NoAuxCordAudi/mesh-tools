@@ -1,3 +1,4 @@
+#![allow(deprecated)] // add_textured_material is kept for this demo; new code uses MaterialBuilder
 use mesh_tools::GltfBuilder;
 use std::error::Error;
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -213,7 +214,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                        // Default alpha mode
         None,                        // No alpha cutoff
         Some(true)                   // Double sided
-    );
+    )?;
     
     // 2. Concentric pattern roughness material
     let pattern_material = builder.add_textured_material(
@@ -229,7 +230,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                        // Default alpha mode
         None,                        // No alpha cutoff
         None                         // Not necessarily double sided
-    );
+    )?;
     
     // 3. Weathered surface material
     let weathered_material = builder.add_textured_material(
@@ -245,7 +246,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                        // Default alpha mode
         None,                        // No alpha cutoff
         None                         // Not necessarily double sided
-    );
+    )?;
     
     // 4. Scratched surface material
     let scratched_material = builder.add_textured_material(
@@ -261,7 +262,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                        // Default alpha mode
         None,                        // No alpha cutoff
         None                         // Not necessarily double sided
-    );
+    )?;
     
     // Create plain materials with fixed roughness for comparison
     let smooth_material = builder.add_material(

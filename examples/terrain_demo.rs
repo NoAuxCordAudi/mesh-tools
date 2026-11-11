@@ -360,7 +360,7 @@ fn generate_terrain_mesh(
         None,
         None,
         terrain_nodes,
-    );
+    )?;
     
     // Add the terrain to the scene
     builder.add_scene(

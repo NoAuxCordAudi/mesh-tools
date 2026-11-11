@@ -8,8 +8,11 @@ A Rust library for creating, manipulating, and exporting 3D meshes with support 
 - Primitive shape generators (box, plane, sphere, cylinder, cone, torus, icosahedron)
 - Material creation with PBR properties (base color, metallic, roughness, emissive)
 - Scene hierarchy and node transformation support
-- Export to binary GLB format with Blender compatibility
-- Comprehensive vertex attribute handling (positions, normals, UVs, tangents, colors)
+- Export to spec-conformant binary GLB (chunk alignment and padding handled); the document is validated first
+- Perspective and orthographic cameras (see [docs/CAMERAS.md](docs/CAMERAS.md))
+- Skinning (see [docs/SKINNING.md](docs/SKINNING.md)) and keyframe animation (see [docs/ANIMATION.md](docs/ANIMATION.md))
+- Morph targets (blend shapes) with weights animation (see [docs/MORPH_TARGETS.md](docs/MORPH_TARGETS.md))
+- Vertex attributes: positions, normals, multiple UV sets, and skinning joints/weights
 - Lightweight math types via mint instead of nalgebra
 
 ## Primitive Shapes
@@ -29,7 +32,7 @@ The library provides generators for these common 3D shapes:
 ### Creating a Simple Box
 
 ```rust
-use gltf_export::GltfBuilder;
+use mesh_tools::GltfBuilder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new glTF builder
@@ -81,6 +84,16 @@ let gold_material = builder.create_metallic_material(
     0.1, // Low roughness factor (shiny)
 );
 
+// Textured material with per-slot texCoord, normal scale and occlusion strength
+// (see docs/MATERIALS.md)
+let brick = builder.add_material_from(
+    mesh_tools::material::MaterialBuilder::new(Some("Brick".to_string()))
+        .with_base_color_texture(albedo_texture)
+        .with_normal_texture(mesh_tools::TextureRef::new(normal_texture).with_tex_coord(1), 0.75)
+        .with_alpha(mesh_tools::AlphaMode::Mask { cutoff: 0.3 })
+        .try_build()?,
+)?;
+
 // Apply material to a mesh
 let sphere_mesh = builder.create_sphere(
     1.0,  // radius
@@ -92,11 +105,16 @@ let sphere_mesh = builder.create_sphere(
 
 ## Mesh Export
 
-The library provides GLB (binary glTF) export functionality that is compatible with Blender and other 3D software:
+The library exports GLB (binary glTF) and validates the document before writing it:
 
 - Proper handling of chunk types and alignment
 - Binary data padding and structure according to glTF spec
-- Support for all vertex attributes (positions, normals, UVs, etc.)
+- Vertex attributes: positions, normals, UV sets and skinning joints/weights
+
+## Validation
+
+Besides the built-in `validate()`, the test corpus is checked against the Khronos glTF-Validator
+in CI. The corpus passes the pinned Khronos validator in CI (no errors; the few accepted warnings are allow-listed with reasons), alongside the in-crate validator and the independent `gltf` crate read-back that the tests enforce. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
 
 ## Math Types and Compatibility Layer
 
@@ -142,11 +160,18 @@ cargo run --example primitives_demo
 The library includes several examples demonstrating different features:
 
 - `simple_box.rs`: Basic box creation and export
-- `primitives_demo.rs`: All supported primitive shapes with different materials
+- `primitives_demo.rs`: Plane, sphere, cylinder, cone, torus and icosahedron with different materials
 - `materials_demo.rs`: Various material types and properties
 - `texture_demo.rs`: Texture mapping and image handling
 - `custom_mesh_demo.rs`: Creating custom meshes from vertex data
 - `hierarchy_demo.rs`: Building scene hierarchies with multiple nodes
+- `animation_demo.rs`: Translation, rotation and scale keyframe animation
+- `skeletal_animation_demo.rs`: A skinned arm that bends (joints, weights, linear and cubic-spline animation)
+- `morph_demo.rs`: A sheet with Bulge and Ripple morph targets and a cubic-spline weights animation; it re-opens its own output and verifies it
+
+More examples live in `examples/` (texture maps, PBR channel demos, terrain, instancing, panel grids, ...).
+
+Run every example with `./run_all_examples.sh` (it exits non-zero if any example fails).
 
 ### Primitives Demo
 
@@ -163,36 +188,36 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | Feature Category | Feature | Support Level | Notes |
 |-----------------|---------|---------------|-------|
 | **Core** |||||
-| | Asset Information | ✅ Full | Version, generator, copyright metadata |
-| | Scenes | ✅ Full | Multiple scenes, default scenes |
-| | Nodes | ✅ Full | Hierarchies, transforms (TRS) |
-| | Buffers | ✅ Full | Binary data handling, GLB chunks |
-| | Buffer Views | ✅ Full | Stride, target support |
-| | Accessors | ✅ Full | All types and component types |
+| | Asset Information | ✅ Full | `version` 2.0, `generator` (settable or omitted), `copyright`, `minVersion`, and asset `extensions`/`extras`, with validation; see docs/EXTENSIONS.md |
+| | Scenes | ✅ Full | Multiple scenes, `add_scene_checked` (non-empty, unique, root nodes only), `add_node_to_scene`, `set_default_scene`/`clear_default_scene` (the first scene is the default until changed), scene `extras`/`extensions`; validated; see docs/SCENES.md |
+| | Nodes | ✅ Full | Hierarchies, TRS (`set_node_transform`) or `matrix` (`add_node_with_matrix`, `set_node_matrix`, `clear_node_matrix`, `matrix_from_trs`; never both, mirrors allowed, shear warned); morph target `weights`; node camera reference (`set_node_camera`, `clear_node_camera`); node `extras`/`extensions`; validated; see docs/NODES.md. The `skin` and `mesh` references are set by the skinned-node and mesh builders |
+| | Buffers | ✅ Full | Any number of buffers: `add_buffer`, `set_write_buffer`, `add_data_view_in_buffer`; per-buffer `name`. Buffer 0 is the GLB BIN chunk (`export_glb`), a base64 data URI (`export_gltf_embedded`, `to_gltf_string_embedded`) or an external `.bin` (`export_gltf`, atomic); buffers 1.. become `<stem>_<n>.bin` files or data URIs (`ExtraBuffers`, `to_gltf_parts_with`, `to_glb_parts`). `BUFFER_*` validation incl. data URIs, file-name collisions; see docs/BUFFERS.md. A hand-added buffer that only has a `uri` is passed through but its bytes cannot be checked (`BUFFER_DATA_UNVERIFIED` warning). Extras/extensions: see the Custom Extensions row |
+| | Buffer Views | ✅ Full | `target` and `byteStride`: `add_data_view` / `add_data_view_in_buffer` for raw views (in any buffer), `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); `buffer`, offset, length, stride, target and alignment validated per buffer |
+| | Accessors | ✅ Full | Typed writer for every component type (`i8`..`f32`) and accessor type (SCALAR..MAT4, padded columns), `normalized`, computed or explicit `min`/`max` (exact for integers), `byteOffset` into shared views, zero accessors (no `bufferView`) and sparse accessors (`u8`/`u16`/`u32` indices, optional zero base); validated; see docs/ACCESSORS.md. extras/extensions: see the Custom Extensions row |
 | **Geometry** |||||
-| | Meshes | ✅ Full | Multiple primitives per mesh |
-| | Primitive Types | ⚠️ Partial | Triangles only, no points or lines |
-| | Morph Targets | ❌ None | Not yet implemented |
+| | Meshes | ✅ Full | Multiple primitives per mesh (`add_mesh_checked`), `PrimitiveSpec`/`create_primitive` with positions, normals, tangents, `TEXCOORD_n` (`f32`, normalized `u8`/`u16`), `COLOR_n` (RGB/RGBA, `f32`, normalized `u8`/`u16`), skin sets, `u8`/`u16`/`u32` indices, material, mode and extras; morph targets and default weights; mesh and primitive extras; validated; see docs/MESHES.md. No `KHR_mesh_quantization` attribute types |
+| | Primitive Types | ✅ Full | All seven modes through `PrimitiveMode` and `create_points`/`create_lines`/`create_line_strip`/`create_triangle_strip`/`create_triangle_fan` (or `PrimitiveSpec.mode`), per-mode count rules, `strip_to_triangles`/`fan_to_triangles` helpers; validated; see docs/PRIMITIVE_MODES.md. The built-in shape generators still emit triangles |
+| | Morph Targets | ✅ Full | `POSITION`, `NORMAL` and `TANGENT` `FLOAT` deltas, dense or sparse (`from_absolute`, `sparse_from_dense`), default and per-node weights, target names, weights animation. Normalized-integer deltas need `KHR_mesh_quantization` (not implemented) |
 | **Materials** |||||
-| | PBR Materials | ✅ Full | Base color, metallic, roughness |
-| | Alpha Modes | ✅ Full | Opaque, mask, blend modes |
+| | PBR Materials | ✅ Full | Metallic-roughness model: all factors and the five texture slots with per-slot `texCoord` (`TextureRef`), normal scale, occlusion strength, `AlphaMode`, extras; `MaterialBuilder::try_build` and `add_material_from` check ranges and texture references; `MATERIAL_*` validation including missing `TEXCOORD_n` on primitives; see docs/MATERIALS.md. Extensions/extras inside texture infos are set with `set_extension`/`set_extras` and `ExtensionTarget::MaterialTexture` |
+| | Alpha Modes | ✅ Full | Opaque, mask (with cutoff), blend modes via `AlphaMode`; invalid modes and cutoffs are rejected |
 | | Double Sided | ✅ Full | Flag for double-sided rendering |
-| | Material Variations | ✅ Full | Both metallic-roughness and specular-glossiness (KHR_materials_pbrSpecularGlossiness) |
+| | Material workflows | ✅ Full | Metallic-roughness (core) and specular-glossiness (deprecated extension), with per-slot `texCoord`, scale and strength; see docs/MATERIALS.md. No other material extensions (`KHR_materials_variants`, clearcoat, sheen, transmission, unlit, ...) |
 | **Textures** |||||
-| | Samplers | ✅ Full | Filter modes, wrap modes |
-| | Images | ✅ Full | Embedded and external references |
-| | Texture Coordinates | ✅ Full | Multiple UV sets |
+| | Samplers | ✅ Full | Typed `MagFilter`/`MinFilter`/`WrapMode` and `SamplerDesc` (all 108 combinations tested); `add_sampler`, `get_or_add_sampler` (dedup), one shared default sampler; `SAMPLER_*` and `TEXTURE_*` validation |
+| | Images | ✅ Full | Core formats PNG/JPEG: embedded in a buffer view (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks), `data:` URIs supported (`add_image_data_uri`) and external relative `uri` (`add_image_uri`); validated (`IMAGE_*`); see docs/BUFFERS.md. WebP/KTX2/basisu are extensions and out of scope |
+| | Texture Coordinates | ✅ Full | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per material slot, including the specular-glossiness textures; missing sets are validated (`MATERIAL_TEXCOORD_MISSING`). No `KHR_texture_transform` |
 | **Animation** |||||
-| | Animation | ✅ Full | Keyframe animation for translations, rotations, and scales |
-| | Skinning | ❌ None | Not yet implemented |
+| | Animation | ✅ Full | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation; rotation and weights as `FLOAT` or normalized `i8`/`u8`/`i16`/`u16` (`add_rotation_track_normalized`, `add_weights_track_normalized`, cubic variants; translation and scale stay `FLOAT`); sampler reuse (`add_channel_with_sampler`); validated on the stored data (`ANIMATION_*`); see docs/ANIMATION.md. `KHR_animation_pointer` and extension channel paths are not implemented |
+| | Skinning | ✅ Full | Skins (joints, skeleton, optional inverse bind matrices, computed or supplied), `add_skinned_node`/`set_node_skin`, any number of `JOINTS_n`/`WEIGHTS_n` sets with `u8`/`u16` joints and `f32` or normalized `u8`/`u16` weights (`SkinWeights`, exact-sum `quantize_u8`/`quantize_u16`); validated (`SKIN_*`, `NODE_SKIN_*`, `SKINNED_*`); see docs/SKINNING.md |
 | **Cameras** |||||
-| | Cameras | ❌ None | Not yet implemented |
+| | Cameras | ✅ Full | Perspective (`add_perspective_camera`: optional `zfar` for an infinite far plane, optional `aspectRatio`) and orthographic (`add_orthographic_camera`) cameras, node references, camera/projection `extras`/`extensions`; ranges validated (`CAMERA_*`); see docs/CAMERAS.md |
 | **Extensions** |||||
-| | KHR_materials_pbrSpecularGlossiness | ✅ Full | Specular-glossiness PBR material workflow |
+| | KHR_materials_pbrSpecularGlossiness | ✅ Full (write-only, deprecated upstream) | Factors, both textures with per-slot `texCoord`, `extensionsUsed` registration (never required), optional metallic-roughness fallback, `SG_*` validation. Superseded by `KHR_materials_specular` + `KHR_materials_ior` (not implemented) |
 | | KHR_materials_unlit | ❌ None | Not yet implemented |
 | | KHR_texture_transform | ❌ None | Not yet implemented |
 | | KHR_mesh_quantization | ❌ None | Not yet implemented |
-| | Custom Extensions | ❌ None | Not yet implemented |
+| | Custom Extensions | ✅ Full | Opaque pass-through: opaque-JSON `extensions` and `extras` through `set_extension`/`set_extras` on every glTF object that can carry them: the root, asset, scenes, nodes, meshes, primitives, materials, `pbrMetallicRoughness`, all seven material texture-info slots (`ExtensionTarget::MaterialTexture`), textures, images, samplers, accessors, `sparse` and its `indices`/`values`, buffer views, buffers, skins, cameras and their projections, animations, channels, channel targets and animation samplers; plus `extensionsUsed`/`extensionsRequired` bookkeeping. Payloads are not interpreted (only `KHR_materials_pbrSpecularGlossiness` is typed); extensions with their own semantics are listed in their own rows, and `KHR_materials_unlit`, `KHR_texture_transform`, `KHR_mesh_quantization` and `KHR_animation_pointer` are not implemented. Khronos corpus not run locally |
 
 ### Legend
 

@@ -12,7 +12,9 @@
 //! - Define materials with physically-based rendering (PBR) properties
 //! - Support for textures and image data
 //! - Create complex hierarchical scenes with node parent-child relationships
-//! - Export models in both glTF (JSON+binary) and GLB (single binary) formats
+//! - Skinning and keyframe animation (translation, rotation, scale; linear, step and cubic spline)
+//! - Morph targets (blend shapes) with default weights, target names and weights animation
+//! - Validated export to GLB (single binary file); see [`GltfBuilder::validate`]
 //! - Lightweight math types via the mint crate
 //!
 //! ## Math Types
@@ -72,19 +74,38 @@ pub mod compat;      // Compatibility layer for mint math types
 pub mod material;    // Material creation and management
 pub mod mesh;        // Mesh creation and manipulation
 pub mod builder;     // Main GltfBuilder implementation
+pub mod accessor;    // Typed accessor writer types
+mod sampler;          // Typed sampler settings
 
 // Internal implementation modules
 mod builder_primitives;       // Implementations for primitive shape creation
 mod builder_texture;          // Implementations for texture handling
 mod builder_material;         // Implementations for material handling
 mod builder_material_specular; // Implementations for specular material handling
+mod interleave;               // Interleaved vertex attributes
+mod builder_accessor;         // The single accessor writer
 mod builder_animation;        // Implementations for animation handling
+mod builder_skin;             // Implementations for skin handling
+mod builder_morph;            // Implementations for morph target handling
+mod uri;                      // Percent-encoding and data: URIs
+mod builder_export;           // Buffer encodings and .gltf export
+mod builder_node;             // Scenes, node matrices and transforms
+mod builder_camera;           // Cameras and node camera references
+mod builder_extensions;       // Extensions, extras and asset metadata
+mod builder_mesh;             // Primitive and mesh creation
+mod primitive_spec;           // Primitive modes, specs and helpers
+pub mod validate;             // Document validation
 
 // Re-exports
 pub use error::{GltfError, Result};
 pub use models::*;
 pub use builder::GltfBuilder;
+pub use builder_export::{BufferEncoding, ExtraBuffers, GlbParts, GltfParts};
+pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
+pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType, SparseSpec};
+pub use interleave::InterleavedAttribute;
+pub use sampler::{MagFilter, MinFilter, SamplerDesc, WrapMode};
 
 // Constants re-exports
 pub use constants::accessor_type;
@@ -94,4 +115,80 @@ pub use constants::sampler_filter;
 pub use constants::sampler_wrap;
 pub use constants::alpha_mode;
 pub use constants::primitive_mode;
-pub use builder_animation::{AnimationPath, InterpolationType};
+pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType, NormalizedComponent};
+pub use builder_skin::{limit_influences, normalize_weights, quantize_u16, quantize_u8, JointIndices, SkinSet, SkinWeights};
+pub use builder_morph::{MorphDelta, MorphTarget};
+pub use material::{AlphaMode, SpecularGlossiness, TextureRef};
+pub use builder_extensions::{ExtensionTarget, TextureSlot};
+pub use primitive_spec::{fan_to_triangles, strip_to_triangles, ColorData, Indices, PrimitiveMode, PrimitiveSpec, TexCoords};
+
+// Compile and run every Rust code block in docs/SKINNING.md as a doctest, so the guide
+// cannot drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/SKINNING.md")]
+struct SkinningGuideDoctests;
+
+// Likewise for docs/ANIMATION.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/ANIMATION.md")]
+struct AnimationGuideDoctests;
+
+// Likewise for docs/MORPH_TARGETS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MORPH_TARGETS.md")]
+struct MorphTargetsGuideDoctests;
+
+// Likewise for docs/VALIDATION.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/VALIDATION.md")]
+struct ValidationGuideDoctests;
+
+// Likewise for docs/EXTENSIONS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/EXTENSIONS.md")]
+struct ExtensionsGuideDoctests;
+
+// Likewise for docs/ACCESSORS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/ACCESSORS.md")]
+struct AccessorsGuideDoctests;
+
+// Likewise for docs/MESHES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MESHES.md")]
+struct MeshesGuideDoctests;
+
+// Likewise for docs/PRIMITIVE_MODES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/PRIMITIVE_MODES.md")]
+struct PrimitiveModesGuideDoctests;
+
+// Likewise for docs/MATERIALS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/MATERIALS.md")]
+struct MaterialsGuideDoctests;
+
+// Likewise for docs/BUFFERS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/BUFFERS.md")]
+struct BuffersGuideDoctests;
+
+// Likewise for docs/TEXTURES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/TEXTURES.md")]
+struct TexturesGuideDoctests;
+
+// Likewise for docs/SCENES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/SCENES.md")]
+struct ScenesGuideDoctests;
+
+// Likewise for docs/NODES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/NODES.md")]
+struct NodesGuideDoctests;
+
+// Likewise for docs/CAMERAS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/CAMERAS.md")]
+struct CamerasGuideDoctests;
