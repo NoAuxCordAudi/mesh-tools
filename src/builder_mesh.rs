@@ -7,7 +7,7 @@ use crate::accessor::{AccessorSpec, AccessorType as T, Bounds, BufferViewTarget,
 use crate::builder::GltfBuilder;
 use crate::builder_accessor::encode_elements;
 use crate::builder_extensions::ExtensionTarget;
-use crate::builder_skin::{validate_skin_sets, JointIndices};
+use crate::builder_skin::{validate_skin_sets, JointIndices, SkinWeights};
 use crate::error::{GltfError, Result};
 use crate::models::{Accessor, Primitive};
 use crate::primitive_spec::*;
@@ -116,8 +116,21 @@ impl GltfBuilder {
                 }
             };
             attributes.insert(format!("JOINTS_{n}"), joints);
-            let weights: Vec<f32> = set.weights.iter().flatten().copied().collect();
-            attributes.insert(format!("WEIGHTS_{n}"), self.write_vertex_attribute(&weights, T::Vec4, false));
+            let weights = match &set.weights {
+                SkinWeights::F32(w) => {
+                    let flat: Vec<f32> = w.iter().flatten().copied().collect();
+                    self.write_vertex_attribute(&flat, T::Vec4, false)
+                }
+                SkinWeights::U8(w) => {
+                    let flat: Vec<u8> = w.iter().flatten().copied().collect();
+                    self.write_vertex_attribute(&flat, T::Vec4, true)
+                }
+                SkinWeights::U16(w) => {
+                    let flat: Vec<u16> = w.iter().flatten().copied().collect();
+                    self.write_vertex_attribute(&flat, T::Vec4, true)
+                }
+            };
+            attributes.insert(format!("WEIGHTS_{n}"), weights);
         }
         let index_spec = AccessorSpec::new().with_target(BufferViewTarget::ElementArrayBuffer);
         let indices = spec.indices.as_ref().map(|i| match i {

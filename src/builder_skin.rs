@@ -338,10 +338,55 @@ impl GltfBuilder {
         }
 
         let index = self.add_node(name, Some(mesh), translation, rotation, scale);
-        if let Some(node) = self.gltf.nodes.as_mut().and_then(|n| n.get_mut(index)) {
-            node.skin = Some(skin);
-        }
+        // Cannot fail: the node is new, has a mesh and has no skin yet, and `skin` exists.
+        self.set_node_skin(index, skin)?;
         Ok(index)
+    }
+
+    /// Attach `skin` to an existing node that renders a mesh.
+    ///
+    /// [`add_skinned_node`](Self::add_skinned_node) is `add_node` followed by this method; use
+    /// this one when the node already exists (for example one shared with a camera or children).
+    /// Like [`set_node_camera`](Self::set_node_camera) it refuses to overwrite: a node that
+    /// already has a skin is an error, and there is no `clear_node_skin`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the node or skin does not exist, the node has no mesh (a
+    /// skin without a mesh is meaningless and fails validation), or the node already has a
+    /// skin. The document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// let mesh = b.create_box(1.0);
+    /// let joint = b.add_joint_node(None, None, None, None);
+    /// let skin = b.add_skin(None, vec![joint], None, None).unwrap();
+    /// let node = b.add_node(None, Some(mesh), None, None, None);
+    /// b.set_node_skin(node, skin).unwrap();
+    /// assert!(b.set_node_skin(node, skin).is_err()); // already skinned
+    /// assert!(b.set_node_skin(node, 9).is_err()); // no such skin
+    /// ```
+    pub fn set_node_skin(&mut self, node: usize, skin: usize) -> Result<()> {
+        let skins = self.gltf.skins.as_ref().map_or(0, Vec::len);
+        if skin >= skins {
+            return Err(invalid(format!("skin {skin} does not exist ({skins} present)")));
+        }
+        let nodes = self.gltf.nodes.as_ref().map_or(0, Vec::len);
+        let n = self
+            .gltf
+            .nodes
+            .as_mut()
+            .and_then(|v| v.get_mut(node))
+            .ok_or_else(|| invalid(format!("node {node} does not exist ({nodes} present)")))?;
+        if n.mesh.is_none() {
+            return Err(invalid(format!("node {node} has no mesh; a skin needs a mesh to deform")));
+        }
+        if let Some(existing) = n.skin {
+            return Err(invalid(format!("node {node} already has skin {existing}")));
+        }
+        n.skin = Some(skin);
+        Ok(())
     }
 
     /// Create a simple linear bone chain
@@ -416,10 +461,7 @@ impl GltfBuilder {
         material: Option<usize>,
     ) -> Result<usize> {
         let indices: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        let set = SkinSet {
-            joints: JointIndices::U16(joints.to_vec()),
-            weights: weights.to_vec(),
-        };
+        let set = SkinSet::new(JointIndices::U16(joints.to_vec()), weights.to_vec());
         let primitive = self.create_skinned_primitive(
             positions,
             Some(&indices),
@@ -512,16 +554,136 @@ impl JointIndices {
     }
 }
 
-/// One set of four joint influences per vertex (`JOINTS_n` + `WEIGHTS_n`).
+/// Weights of one influence set (`WEIGHTS_n`): four per vertex.
+///
+/// `U8` and `U16` are written as normalized integers (`normalized: true`), so `255` / `65535`
+/// mean a weight of 1.0. Across all sets a vertex's weights must sum to exactly 1: for integer
+/// sets that is an exact integer sum (`255` for `u8`, `65535` for `u16`, a `u8` unit counting
+/// as 257 `u16` units when the two are mixed); with any `f32` set the sum must be within `1e-5`.
+/// Use [`quantize_u8`] / [`quantize_u16`] to produce integer weights from `f32`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SkinSet {
-    pub joints: JointIndices,
-    /// Weight for each joint above, as `f32`. Across all sets, a vertex's weights sum to 1.
-    pub weights: Vec<[f32; 4]>,
+#[non_exhaustive]
+pub enum SkinWeights {
+    F32(Vec<[f32; 4]>),
+    U8(Vec<[u8; 4]>),
+    U16(Vec<[u16; 4]>),
 }
 
-/// Maximum allowed deviation of a vertex's weight sum from 1.0.
-const WEIGHT_SUM_TOLERANCE: f32 = 1e-5;
+impl SkinWeights {
+    fn len(&self) -> usize {
+        match self {
+            SkinWeights::F32(v) => v.len(),
+            SkinWeights::U8(v) => v.len(),
+            SkinWeights::U16(v) => v.len(),
+        }
+    }
+
+    /// Weight of slot `k` of vertex `v` as a real number (integers divided by their maximum).
+    fn value(&self, v: usize, k: usize) -> f64 {
+        match self {
+            SkinWeights::F32(w) => f64::from(w[v][k]),
+            SkinWeights::U8(w) => f64::from(w[v][k]) / 255.0,
+            SkinWeights::U16(w) => f64::from(w[v][k]) / 65535.0,
+        }
+    }
+
+    /// Weight in units of 1/65535 for integer sets, `None` for `f32`.
+    fn units(&self, v: usize, k: usize) -> Option<u32> {
+        match self {
+            SkinWeights::F32(_) => None,
+            SkinWeights::U8(w) => Some(u32::from(w[v][k]) * 257),
+            SkinWeights::U16(w) => Some(u32::from(w[v][k])),
+        }
+    }
+}
+
+impl From<Vec<[f32; 4]>> for SkinWeights {
+    fn from(w: Vec<[f32; 4]>) -> Self {
+        SkinWeights::F32(w)
+    }
+}
+impl From<Vec<[u8; 4]>> for SkinWeights {
+    fn from(w: Vec<[u8; 4]>) -> Self {
+        SkinWeights::U8(w)
+    }
+}
+impl From<Vec<[u16; 4]>> for SkinWeights {
+    fn from(w: Vec<[u16; 4]>) -> Self {
+        SkinWeights::U16(w)
+    }
+}
+
+/// One set of four joint influences per vertex (`JOINTS_n` + `WEIGHTS_n`).
+///
+/// Build it with [`SkinSet::new`]; the struct is `#[non_exhaustive]` so it can grow.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct SkinSet {
+    pub joints: JointIndices,
+    /// Weight for each joint above. Across all sets, a vertex's weights sum to 1.
+    pub weights: SkinWeights,
+}
+
+impl SkinSet {
+    /// Pair joint indices with weights. `weights` may be `Vec<[f32; 4]>`, `Vec<[u8; 4]>`,
+    /// `Vec<[u16; 4]>` or a [`SkinWeights`]. Nothing is checked here; the primitive writers
+    /// validate counts, signs, sums and joint slots before writing.
+    pub fn new(joints: JointIndices, weights: impl Into<SkinWeights>) -> Self {
+        SkinSet { joints, weights: weights.into() }
+    }
+}
+
+/// Maximum allowed deviation of a vertex's weight sum from 1.0 (sets containing `f32`).
+const WEIGHT_SUM_TOLERANCE: f64 = 1e-5;
+
+/// Largest-remainder quantization of one vertex's weights to integers summing to exactly `max`.
+fn quantize_vertex(v: usize, w: &[f32; 4], max: u32) -> Result<[u32; 4]> {
+    if w.iter().any(|x| !x.is_finite() || *x < 0.0) {
+        return Err(invalid(format!("vertex {v}: weights must be finite and >= 0, got {w:?}")));
+    }
+    let sum: f64 = w.iter().map(|&x| f64::from(x)).sum();
+    if sum <= 0.0 {
+        return Err(invalid(format!("vertex {v}: weights sum to zero and cannot be quantized")));
+    }
+    if (sum - 1.0).abs() > 1e-4 {
+        return Err(invalid(format!("vertex {v}: weights sum to {sum}, expected 1.0 (see normalize_weights)")));
+    }
+    let ideal: [f64; 4] = w.map(|x| f64::from(x) / sum * f64::from(max));
+    let mut out = ideal.map(|x| x.floor() as u32);
+    let spare = max - out.iter().sum::<u32>();
+    let mut order = [0usize, 1, 2, 3];
+    // Largest fractional part first; equal fractions favour the lower slot.
+    order.sort_by(|&a, &b| (ideal[b] - ideal[b].floor()).total_cmp(&(ideal[a] - ideal[a].floor())).then(a.cmp(&b)));
+    for &k in order.iter().take(spare as usize) {
+        out[k] += 1;
+    }
+    Ok(out)
+}
+
+/// Quantize `f32` weights to normalized `u8` (`WEIGHTS_n` with `normalized: true`).
+///
+/// Largest-remainder rounding: each vertex's four values sum to exactly 255, which plain
+/// rounding does not guarantee. Slots with a zero weight stay 0.
+///
+/// ```
+/// use mesh_tools::quantize_u8;
+/// assert_eq!(quantize_u8(&[[0.5, 0.25, 0.125, 0.125]]).unwrap(), vec![[127, 64, 32, 32]]);
+/// ```
+///
+/// # Errors
+///
+/// `GltfError::InvalidInput` naming the vertex if a weight is negative or non-finite, the sum is
+/// zero, or the sum differs from 1 by more than `1e-4` (call [`normalize_weights`] first).
+pub fn quantize_u8(weights: &[[f32; 4]]) -> Result<Vec<[u8; 4]>> {
+    weights.iter().enumerate().map(|(v, w)| quantize_vertex(v, w, 255).map(|q| q.map(|x| x as u8))).collect()
+}
+
+/// Quantize `f32` weights to normalized `u16`; each vertex sums to exactly 65535.
+///
+/// See [`quantize_u8`] for the rounding rule and errors.
+pub fn quantize_u16(weights: &[[f32; 4]]) -> Result<Vec<[u16; 4]>> {
+    weights.iter().enumerate().map(|(v, w)| quantize_vertex(v, w, 65535).map(|q| q.map(|x| x as u16))).collect()
+}
 
 fn invalid(msg: String) -> GltfError {
     GltfError::InvalidInput(msg)
@@ -544,18 +706,21 @@ pub(crate) fn validate_skin_sets(vertex_count: usize, skin_sets: &[SkinSet], joi
         }
     }
 
+    let all_integer = skin_sets.iter().all(|s| !matches!(s.weights, SkinWeights::F32(_)));
     for v in 0..vertex_count {
-        let mut sum = 0.0f32;
+        let mut sum = 0.0f64;
+        let mut units = 0u64;
         let mut used: Vec<usize> = Vec::new();
         for (n, set) in skin_sets.iter().enumerate() {
             let joints = set.joints.get(v);
-            for (k, &w) in set.weights[v].iter().enumerate() {
+            for (k, &j) in joints.iter().enumerate() {
+                let w = set.weights.value(v, k);
                 if !w.is_finite() || w < 0.0 {
                     return Err(invalid(format!("vertex {v}: weight {w} in set {n} slot {k} must be finite and >= 0")));
                 }
                 sum += w;
+                units += u64::from(set.weights.units(v, k).unwrap_or(0));
                 if w > 0.0 {
-                    let j = joints[k];
                     if j >= joint_count {
                         return Err(invalid(format!(
                             "vertex {v}: joint slot {j} in set {n} is out of range for a skin with {joint_count} joints \
@@ -569,10 +734,14 @@ pub(crate) fn validate_skin_sets(vertex_count: usize, skin_sets: &[SkinSet], joi
                 }
             }
         }
-        if (sum - 1.0).abs() > WEIGHT_SUM_TOLERANCE {
-            return Err(invalid(format!(
-                "vertex {v}: weights sum to {sum}, expected 1.0 (see normalize_weights)"
-            )));
+        if all_integer {
+            if units != 65535 {
+                return Err(invalid(format!(
+                    "vertex {v}: integer weights sum to {units}/65535 of 1.0 (255 for u8, 65535 for u16), expected exactly 1.0 (see quantize_u8)"
+                )));
+            }
+        } else if (sum - 1.0).abs() > WEIGHT_SUM_TOLERANCE {
+            return Err(invalid(format!("vertex {v}: weights sum to {sum}, expected 1.0 (see normalize_weights)")));
         }
     }
     Ok(())

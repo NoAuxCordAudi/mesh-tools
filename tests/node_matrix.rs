@@ -171,7 +171,7 @@ fn matrix_cannot_be_set_on_a_trs_animated_node_but_weights_are_fine() {
 fn a_weights_channel_does_not_block_a_matrix() {
     use mesh_tools::{JointIndices, MorphTarget, SkinSet};
     let mut b = GltfBuilder::new();
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let pos = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let mut p = b.create_skinned_primitive(&pos, Some(&[0, 1, 2]), None, None, &[set], 1, None).unwrap();
     b.attach_morph_targets(&mut p, &[MorphTarget::new().with_positions(vec![0.1; 9])]).unwrap();

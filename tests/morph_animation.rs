@@ -10,7 +10,7 @@ const POS: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 /// Returns (builder, animation, node, mesh).
 fn setup(m: usize) -> (GltfBuilder, usize, usize, usize) {
     let mut b = GltfBuilder::new();
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut p = b.create_skinned_primitive(&POS, Some(&[0, 1, 2]), None, None, &[set], 1, None).unwrap();
     let targets: Vec<MorphTarget> = (0..m).map(|_| MorphTarget::new().with_positions(vec![0.1; 9])).collect();
     b.attach_morph_targets(&mut p, &targets).unwrap();
@@ -193,7 +193,7 @@ fn low_level_api_checks_the_exact_count_when_the_channel_is_added() {
 
     // A node whose mesh has M=3 needs 9 values; the same sampler is wrong for it.
     let (m3_mesh_node, _) = {
-        let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+        let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
         let mut p = b.create_skinned_primitive(&POS, Some(&[0, 1, 2]), None, None, &[set], 1, None).unwrap();
         let targets: Vec<MorphTarget> = (0..3).map(|_| MorphTarget::new().with_positions(vec![0.0; 9])).collect();
         b.attach_morph_targets(&mut p, &targets).unwrap();

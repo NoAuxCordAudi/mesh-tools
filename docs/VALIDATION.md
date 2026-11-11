@@ -98,6 +98,14 @@ Extension and asset codes (`ASSET_*`, `EXTENSION_*`, `EXTENSIONS_*`) are listed 
 [EXTENSIONS.md](EXTENSIONS.md); the Khronos validator reports the same problems as
 `UNDECLARED_EXTENSION`, `EMPTY_ENTRY`, `UNUSED_EXTENSION_REQUIRED` and `UNSUPPORTED_EXTENSION`.
 The `extensions_everywhere` corpus document carries extensions and extras on every addressable object (texture infos, sparse objects, channel targets); the in-crate `EXTENSION_NOT_DECLARED` search covers them all.
+Skin codes (see [SKINNING.md](SKINNING.md)) correspond to the Khronos `ACCESSOR_WEIGHTS_NEGATIVE`,
+`ACCESSOR_WEIGHTS_NON_NORMALIZED`, `ACCESSOR_JOINTS_INDEX_DUPLICATE`, `ACCESSOR_JOINTS_USED_ZERO_WEIGHT`
+(a warning there, so `SKIN_JOINT_ZERO_WEIGHT_INDEX` is one too), `NODE_SKINNED_MESH_NON_ROOT`
+(`SKINNED_NODE_NOT_ROOT`) and `NODE_SKINNED_MESH_WITHOUT_SKIN` (`SKINNED_MESH_WITHOUT_SKIN`); the
+inverse bind matrix view rule maps to a buffer view usage error. The names and severities are
+from memory, so no negative cross-check is registered for them yet. The `skinned_u8_weights`
+and `skinned_mixed_sets` corpus documents cover normalized integer weights, two influence sets
+and an inverse-bind-matrix-less skin.
 These mappings are unverified against a local run of the pinned validator.
 
 The Khronos codes come from the validator's `lib/src/errors.dart` at the pinned version. Later

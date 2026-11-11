@@ -105,7 +105,69 @@ normalize_weights(&mut weights)?;
 For more than four influences, or `u8` joints, use `create_skinned_primitive` with one or more
 `SkinSet`s (`JOINTS_0`/`WEIGHTS_0`, `JOINTS_1`/`WEIGHTS_1`, ...). It also validates everything
 before writing anything, so a failed call leaves the document unchanged. `MeshBuilder` can
-build the same data with `with_joints`, `with_weights`, `with_joint_count` and `build_into`.
+build the same data with `with_joints`, `with_weights`, `with_joint_count` and `build_into`, or
+with `with_skin_sets` (instead of `with_joints`/`with_weights`; combining them is an error).
+
+### Normalized integer weights
+
+`SkinSet::new(joints, weights)` takes `Vec<[f32; 4]>`, `Vec<[u8; 4]>` or `Vec<[u16; 4]>`
+(the `SkinWeights` enum, `#[non_exhaustive]`). Integer weights are written as normalized
+`UNSIGNED_BYTE`/`UNSIGNED_SHORT` (255 or 65535 means 1.0), a quarter or a half the size of `f32`.
+
+Integer sums must be **exact**: a vertex's weights over all sets add up to 255 (`u8`) or 65535
+(`u16`); a `u8` unit counts as 257 `u16` units when the two are mixed. Sets containing `f32`
+use the `1e-5` tolerance. `quantize_u8` and `quantize_u16` get you there from `f32` with
+largest-remainder rounding, so the sum is exact (plain rounding is not):
+
+```rust
+use mesh_tools::{quantize_u16, quantize_u8, GltfBuilder, JointIndices, SkinSet};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+// 0.5 / 0.25 / 0.125 / 0.125 of 255 is 127.5 / 63.75 / 31.875 / 31.875; the three spare
+// units go to the largest fractions, so the result sums to 255.
+let w = quantize_u8(&[[0.5, 0.25, 0.125, 0.125]; 3])?;
+assert_eq!(w[0], [127, 64, 32, 32]);
+// Thirds are exact in u16: 65535 / 3 = 21845.
+assert_eq!(quantize_u16(&[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0]])?, vec![[21845, 21845, 21845, 0]]);
+
+let mut builder = GltfBuilder::new();
+let set = SkinSet::new(JointIndices::U8(vec![[0, 1, 2, 3]; 3]), w);
+let positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+let primitive = builder.create_skinned_primitive(&positions, Some(&[0, 1, 2]), None, None, &[set], 4, None)?;
+assert!(primitive.attributes.contains_key("WEIGHTS_0"));
+
+// A sum that is off by one unit is rejected, naming the vertex.
+let off = SkinSet::new(JointIndices::U8(vec![[0, 1, 0, 0]; 3]), vec![[200u8, 54, 0, 0]; 3]);
+assert!(builder.create_skinned_primitive(&positions, Some(&[0, 1, 2]), None, None, &[off], 4, None).is_err());
+# Ok(())
+# }
+```
+
+`quantize_*` requires the input to sum to 1 within `1e-4` (use `normalize_weights` first) and
+reports the offending vertex.
+
+## Skin attachment
+
+`add_skinned_node(name, mesh, skin, ..)` creates a node and attaches a skin. It is `add_node`
+followed by `set_node_skin(node, skin)`, which you can call on its own for an existing node:
+the node must render a mesh and must not already have a skin (there is no `clear_node_skin`;
+a failed call changes nothing). A skin does not need inverse bind matrices: pass `None` to
+`add_skin` and glTF uses identity matrices.
+
+## Validation codes
+
+Errors: `SKIN_WEIGHTS_NEGATIVE`, `SKIN_WEIGHTS_SUM` (over all sets of a primitive; the
+validator tolerates one rounding step of the coarsest integer type present, the writer none),
+`SKIN_VERTEX_JOINT_DUPLICATE` (the same slot weighted twice on a vertex; distinct from
+`SKIN_JOINT_DUPLICATE`, which is a node listed twice in a skin), `SKIN_IBM_VIEW_TARGET`
+(an inverse bind matrix view must have no `target`), `SKIN_MESH_MISSING_ATTRIBUTES`,
+`SKIN_JOINT_OUT_OF_RANGE` and `NODE_SKIN_INVALID`. An inverse bind matrix view with a
+`byteStride` is reported by the general `BUFFER_VIEW_STRIDE_ON_NON_VERTEX`.
+
+Warnings: `SKIN_JOINT_ZERO_WEIGHT_INDEX` (a slot with weight 0 names a joint other than 0),
+`SKINNED_NODE_NOT_ROOT` (a skinned node has a parent; the parent's transform does not apply),
+`SKINNED_MESH_WITHOUT_SKIN` (a node renders a mesh with `JOINTS_0` but has no skin) and
+`SKINNED_NODE_LOCAL_TRANSFORM`.
 
 ## Animation
 

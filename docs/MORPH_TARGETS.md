@@ -84,10 +84,7 @@ let joint = builder.add_joint_node(Some("Root".into()), None, None, None);
 let skin = builder.add_skin_from_joints(None, vec![joint], Some(joint))?;
 
 let positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-let influences = SkinSet {
-    joints: JointIndices::U8(vec![[0; 4]; 3]),
-    weights: vec![[1.0, 0.0, 0.0, 0.0]; 3],
-};
+let influences = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
 let mut primitive =
     builder.create_skinned_primitive(&positions, Some(&[0, 1, 2]), None, None, &[influences], 1, None)?;
 

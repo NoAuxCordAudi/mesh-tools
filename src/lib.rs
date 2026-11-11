@@ -116,7 +116,7 @@ pub use constants::sampler_wrap;
 pub use constants::alpha_mode;
 pub use constants::primitive_mode;
 pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
-pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
+pub use builder_skin::{limit_influences, normalize_weights, quantize_u16, quantize_u8, JointIndices, SkinSet, SkinWeights};
 pub use builder_morph::{MorphDelta, MorphTarget};
 pub use material::{AlphaMode, SpecularGlossiness, TextureRef};
 pub use builder_extensions::{ExtensionTarget, TextureSlot};

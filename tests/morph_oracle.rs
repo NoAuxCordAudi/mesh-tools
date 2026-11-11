@@ -32,7 +32,7 @@ fn fixture(mesh_weights: Option<Vec<f32>>, node_weights: Option<Vec<f32>>) -> (G
     let mut b = GltfBuilder::new();
     let joint = b.add_joint_node(Some("J".into()), None, None, None);
     let skin = b.add_skin_from_joints(None, vec![joint], Some(joint)).unwrap();
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut prim = b
         .create_skinned_primitive(&flat(&BASE), Some(&[0, 1, 2]), Some(&flat(&[BASE_NORMAL; 3])), None, &[set], 1, None)
         .unwrap();
@@ -332,7 +332,7 @@ fn cubic_spline_tangents_scale_with_the_keyframe_interval() {
     let times = [0.0, 2.0];
     // The fixture mesh has 2 targets, so use a second single-target mesh for this M=1 case.
     let mut b = GltfBuilder::new();
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut prim = b.create_skinned_primitive(&flat(&BASE), None, None, None, &[set], 1, None).unwrap();
     b.attach_morph_targets(&mut prim, &[MorphTarget::new().with_positions(flat(&T0))]).unwrap();
     let mesh = b.add_morphable_mesh(None, vec![prim], None, None).unwrap();

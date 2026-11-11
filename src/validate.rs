@@ -132,7 +132,7 @@ impl GltfBuilder {
         let parents = doc.check_hierarchy(&mut r);
         doc.check_scenes(&parents, &mut r);
         doc.check_skins(&parents, &mut r);
-        doc.check_skinned_nodes(&mut r);
+        doc.check_skinned_nodes(&parents, &mut r);
         doc.check_animations(&mut r);
         doc.check_cameras(&mut r);
         doc.check_textures(&mut r);
@@ -842,6 +842,7 @@ impl<'a> Doc<'a> {
                     list.push(format!("{}: mesh {mi} primitive {pi} {}", issue.code, issue.msg));
                 }
                 self.check_primitive_data(mi, pi, p, r);
+                self.check_skin_attributes(mi, pi, p, r);
             }
         }
     }
@@ -996,7 +997,17 @@ impl<'a> Doc<'a> {
     }
 
     fn check_skins(&self, parents: &[Option<usize>], r: &mut ValidationReport) {
+        let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
         for (si, skin) in self.b.gltf.skins.iter().flatten().enumerate() {
+            // Inverse bind matrices are non-vertex data: the view must not carry a target. (A
+            // byteStride is already reported as BUFFER_VIEW_STRIDE_ON_NON_VERTEX.)
+            if let Some(view) = skin.inverse_bind_matrices.and_then(|a| self.accessors.get(a)).and_then(|a| a.buffer_view) {
+                if let Some(t) = views.get(view).and_then(|v| v.target) {
+                    r.errors.push(format!(
+                        "SKIN_IBM_VIEW_TARGET: skin {si} inverse bind matrices use buffer view {view}, which has target {t}; it must have none"
+                    ));
+                }
+            }
             if skin.joints.is_empty() {
                 r.errors.push(format!("SKIN_NO_JOINTS: skin {si} has no joints"));
                 continue;
@@ -1189,10 +1200,24 @@ impl<'a> Doc<'a> {
         }
     }
 
-    fn check_skinned_nodes(&self, r: &mut ValidationReport) {
+    fn check_skinned_nodes(&self, parents: &[Option<usize>], r: &mut ValidationReport) {
         let skins = self.b.gltf.skins.as_deref().unwrap_or(&[]);
         for (ni, node) in self.nodes.iter().enumerate() {
-            let Some(si) = node.skin else { continue };
+            let Some(si) = node.skin else {
+                let skinned_mesh = node.mesh.and_then(|m| self.meshes.get(m)).filter(|m| m.primitives.iter().any(|p| p.attributes.contains_key("JOINTS_0")));
+                if let (Some(mi), Some(_)) = (node.mesh, skinned_mesh) {
+                    r.warnings.push(format!(
+                        "SKINNED_MESH_WITHOUT_SKIN: node {ni} renders mesh {mi}, which has JOINTS_0 data, but has no skin; it is drawn unskinned"
+                    ));
+                }
+                continue;
+            };
+            if parents.get(ni).copied().flatten().is_some() {
+                r.warnings.push(format!(
+                    "SKINNED_NODE_NOT_ROOT: node {ni} has skin {si} but is a child of node {}; parent transforms do not affect a skinned mesh",
+                    parents[ni].unwrap()
+                ));
+            }
             let Some(skin) = skins.get(si) else {
                 r.errors.push(format!("NODE_SKIN_INVALID: node {ni} references skin {si} ({} skins)", skins.len()));
                 continue;
@@ -1237,6 +1262,100 @@ impl<'a> Doc<'a> {
                          JOINTS_n holds skin slots, not node indices"
                     ));
                     return;
+                }
+            }
+        }
+    }
+
+    /// `WEIGHTS_n` of a primitive read back as `(values, units, tolerance)`: per vertex four real
+    /// weights, and for normalized integer data the same weights in 1/65535 units.
+    fn read_weights(&self, index: usize) -> Option<WeightData> {
+        let (a, elems) = self.accessor_elements(index).filter(|(a, _)| a.sparse.is_none() && a.type_ == "VEC4")?;
+        let comps = |e: &[u8], size: usize| -> [u32; 4] {
+            std::array::from_fn(|k| match size {
+                1 => u32::from(e[k]),
+                _ => u32::from(u16::from_le_bytes([e[2 * k], e[2 * k + 1]])),
+            })
+        };
+        match (a.component_type, a.normalized == Some(true)) {
+            (5126, _) => Some(WeightData {
+                values: elems.map(|e| std::array::from_fn(|k| f64::from(f32::from_le_bytes([e[4 * k], e[4 * k + 1], e[4 * k + 2], e[4 * k + 3]])))).collect(),
+                units: None,
+                step: 0,
+            }),
+            (5121, true) => {
+                let raw: Vec<[u32; 4]> = elems.map(|e| comps(e, 1)).collect();
+                Some(WeightData { values: raw.iter().map(|w| w.map(|x| f64::from(x) / 255.0)).collect(), units: Some(raw.iter().map(|w| w.map(|x| x * 257)).collect()), step: 257 })
+            }
+            (5123, true) => {
+                let raw: Vec<[u32; 4]> = elems.map(|e| comps(e, 2)).collect();
+                Some(WeightData { values: raw.iter().map(|w| w.map(|x| f64::from(x) / 65535.0)).collect(), units: Some(raw), step: 1 })
+            }
+            _ => None,
+        }
+    }
+
+    /// Weight and joint data rules that hold for any primitive, skinned node or not: weights are
+    /// non-negative and sum to 1 per vertex over all sets, no joint is weighted twice on a vertex,
+    /// and zero-weight slots point at joint 0.
+    fn check_skin_attributes(&self, mi: usize, pi: usize, p: &Primitive, r: &mut ValidationReport) {
+        let sets = joint_sets(p);
+        let at = format!("mesh {mi} primitive {pi}");
+        let mut weights: Vec<(usize, WeightData)> = Vec::new();
+        let mut joints: Vec<(usize, Vec<[usize; 4]>)> = Vec::new();
+        for &n in &sets {
+            if let Some(w) = p.attributes.get(&format!("WEIGHTS_{n}")).and_then(|&a| self.read_weights(a)) {
+                if let Some((v, k)) = w.values.iter().enumerate().find_map(|(v, ws)| ws.iter().position(|&x| x < 0.0).map(|k| (v, k))) {
+                    r.errors.push(format!("SKIN_WEIGHTS_NEGATIVE: {at} WEIGHTS_{n} vertex {v} slot {k} is {}", w.values[v][k]));
+                }
+                if let Some(j) = p.attributes.get(&format!("JOINTS_{n}")).and_then(|&a| self.read_joints(a)) {
+                    if let Some((v, k)) = j.iter().zip(&w.values).enumerate().find_map(|(v, (js, ws))| (0..4).find(|&k| ws[k] == 0.0 && js[k] != 0).map(|k| (v, k))) {
+                        r.warnings.push(format!(
+                            "SKIN_JOINT_ZERO_WEIGHT_INDEX: {at} JOINTS_{n} vertex {v} slot {k} is {} but its weight is 0; unused slots should use joint 0",
+                            j[v][k]
+                        ));
+                    }
+                    joints.push((n, j));
+                }
+                weights.push((n, w));
+            }
+        }
+        // Everything below needs every set readable and the same vertex count.
+        if weights.len() != sets.len() || joints.len() != sets.len() {
+            return;
+        }
+        let vertices = weights.first().map_or(0, |(_, w)| w.values.len());
+        if weights.iter().any(|(_, w)| w.values.len() != vertices) || joints.iter().any(|(_, j)| j.len() != vertices) {
+            return;
+        }
+        let all_integer = weights.iter().all(|(_, w)| w.units.is_some());
+        // One rounding step of the coarsest integer type present (257 units for u8, 1 for u16).
+        let step = weights.iter().map(|(_, w)| w.step).max().unwrap_or(1);
+        for v in 0..vertices {
+            let sum: f64 = weights.iter().flat_map(|(_, w)| w.values[v]).sum();
+            // Integer data must hit 1 to within one rounding step of its coarsest type; floats within 1e-5.
+            let off = if all_integer {
+                let units: u64 = weights.iter().flat_map(|(_, w)| w.units.as_ref().unwrap()[v]).map(u64::from).sum();
+                units.abs_diff(65535) > u64::from(step)
+            } else {
+                !((sum - 1.0).abs() <= 1e-5)
+            };
+            if off {
+                r.errors.push(format!("SKIN_WEIGHTS_SUM: {at} vertex {v} weights sum to {sum}, expected 1"));
+                break;
+            }
+        }
+        for v in 0..vertices {
+            let mut seen: Vec<usize> = Vec::new();
+            for ((_, j), (_, w)) in joints.iter().zip(&weights) {
+                for k in 0..4 {
+                    if w.values[v][k] > 0.0 {
+                        if seen.contains(&j[v][k]) {
+                            r.errors.push(format!("SKIN_VERTEX_JOINT_DUPLICATE: {at} vertex {v} weights joint slot {} more than once", j[v][k]));
+                            return;
+                        }
+                        seen.push(j[v][k]);
+                    }
                 }
             }
         }
@@ -1440,6 +1559,13 @@ impl<'a> Doc<'a> {
             r.warnings.push(format!("MORPH_TARGET_POSITION_NO_BOUNDS: {at} accessor {acc} lacks min/max"));
         }
     }
+}
+
+/// Decoded `WEIGHTS_n` data: real weights per vertex, plus 1/65535 units for normalized integers.
+struct WeightData {
+    values: Vec<[f64; 4]>,
+    units: Option<Vec<[u32; 4]>>,
+    step: u32,
 }
 
 /// Attribute set numbers `n` for which the primitive has `JOINTS_n`.

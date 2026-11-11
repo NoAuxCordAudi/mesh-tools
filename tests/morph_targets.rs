@@ -7,7 +7,7 @@ use mesh_tools::{GltfBuilder, GltfError, JointIndices, MorphDelta, MorphTarget, 
 fn base_primitive(b: &mut GltfBuilder) -> Primitive {
     let positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let normals = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     b.create_skinned_primitive(&positions, Some(&[0, 1, 2]), Some(&normals), None, &[set], 1, None).unwrap()
 }
 
@@ -147,7 +147,7 @@ fn a_late_invalid_target_leaves_earlier_valid_targets_unwritten() {
 #[test]
 fn normal_deltas_need_base_normals() {
     let mut b = GltfBuilder::new();
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut prim = b.create_skinned_primitive(&[0.0; 9], None, None, None, &[set], 1, None).unwrap();
     let before = counts(&b);
     let msg = err(b.attach_morph_targets(&mut prim, &[MorphTarget::new().with_normals(vec![0.0; 9])]));

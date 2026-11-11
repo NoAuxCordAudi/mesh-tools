@@ -6,7 +6,7 @@ const POS: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 const NRM: [f32; 9] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
 
 fn skinned_primitive(b: &mut GltfBuilder) -> mesh_tools::Primitive {
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     b.create_skinned_primitive(&POS, Some(&[0, 1, 2]), Some(&NRM), None, &[set], 1, None).unwrap()
 }
 

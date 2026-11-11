@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.19.0
+
+Skinning. The README Skinning row is Full (the Khronos corpus has not been run locally). Output
+for f32 weights is byte-identical to 0.18.0 (`tests/accessor_goldens.rs`).
+
+### Added
+- `SkinWeights { F32, U8, U16 }` (`#[non_exhaustive]`), `SkinSet::new`, `quantize_u8`,
+  `quantize_u16` (largest remainder, exact sums), `MeshBuilder::with_skin_sets`. Integer weights
+  are written normalized; their per-vertex sum must be exact (see docs/SKINNING.md).
+- `set_node_skin(node, skin)`; `add_skinned_node` is now `add_node` plus `set_node_skin`
+  (same behaviour and errors as before).
+- Validator errors `SKIN_WEIGHTS_NEGATIVE`, `SKIN_WEIGHTS_SUM`, `SKIN_VERTEX_JOINT_DUPLICATE`,
+  `SKIN_IBM_VIEW_TARGET`; warnings `SKIN_JOINT_ZERO_WEIGHT_INDEX`, `SKINNED_NODE_NOT_ROOT`,
+  `SKINNED_MESH_WITHOUT_SKIN`. A stride on an inverse bind matrix view stays
+  `BUFFER_VIEW_STRIDE_ON_NON_VERTEX` (no `SKIN_IBM_VIEW_STRIDE` duplicate).
+- Corpus documents `skinned_u8_weights` and `skinned_mixed_sets`.
+
+### Changed
+- The writer's weight-sum check now adds in `f64` (same `1e-5` tolerance); integer sets use an
+  exact integer sum.
+- Documents that were valid may now report the new skin warnings (a skinned node under a parent,
+  a node using a skinned mesh without a skin) and errors (negative or non-normalized weights,
+  a vertex weighting one joint twice, a target on an inverse bind matrix view) when read back.
+
+### Breaking
+- `SkinSet` is `#[non_exhaustive]` and `SkinSet::weights` is now `SkinWeights`, not
+  `Vec<[f32; 4]>`. Migration: `SkinSet { joints, weights }` becomes `SkinSet::new(joints, weights)`
+  (accepts `Vec<[f32; 4]>` unchanged); read access matches on `SkinWeights::F32(..)`.
+
 ## 0.18.0
 
 Every glTF object that can carry `extensions`/`extras` is now reachable. The README Custom

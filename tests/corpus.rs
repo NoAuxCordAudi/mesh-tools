@@ -253,6 +253,44 @@ fn skinned_doc() -> GltfBuilder {
     b
 }
 
+/// Skinned triangle with normalized `u8` weights (200 + 55 = 255) on `u8` joints, computed IBMs.
+fn skinned_u8_weights_doc() -> GltfBuilder {
+    use mesh_tools::{quantize_u8, JointIndices, SkinSet};
+    let mut b = GltfBuilder::new();
+    let names: Vec<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
+    let joints = b.create_bone_chain(&names, &[[0.0; 3], [0.0, 1.0, 0.0]]).unwrap();
+    let skin = b.add_skin_from_joints(None, joints.clone(), Some(joints[0])).unwrap();
+    let w = quantize_u8(&[[200.0 / 255.0, 55.0 / 255.0, 0.0, 0.0]; 3]).unwrap();
+    let set = SkinSet::new(JointIndices::U8(vec![[0, 1, 0, 0]; 3]), w);
+    let positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let prim = b.create_skinned_primitive(&positions, Some(&[0, 1, 2]), None, None, &[set], 2, None).unwrap();
+    let mesh = b.add_mesh(None, vec![prim]);
+    let node = b.add_skinned_node(None, mesh, skin, None, None, None).unwrap();
+    b.add_scene(None, Some(vec![node, joints[0]]));
+    b
+}
+
+/// Three joints, two influence sets mixing `u16` and `f32` weights, a skin without inverse bind
+/// matrices, and the skin attached with `set_node_skin`.
+fn skinned_mixed_sets_doc() -> GltfBuilder {
+    use mesh_tools::{JointIndices, SkinSet};
+    let mut b = GltfBuilder::new();
+    let names: Vec<String> = ["A", "B", "C"].iter().map(|s| s.to_string()).collect();
+    let joints = b.create_bone_chain(&names, &[[0.0; 3], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]]).unwrap();
+    let skin = b.add_skin(None, joints.clone(), None, Some(joints[0])).unwrap();
+
+    // Set 0: u16 halves, 32768 + 32767 = 65535 exactly; set 1 carries zero f32 weights.
+    let s0 = SkinSet::new(JointIndices::U8(vec![[0, 1, 0, 0]; 3]), vec![[32768u16, 32767, 0, 0]; 3]);
+    let s1 = SkinSet::new(JointIndices::U16(vec![[0; 4]; 3]), vec![[0.0f32; 4]; 3]);
+    let positions = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let prim = b.create_skinned_primitive(&positions, Some(&[0, 1, 2]), None, None, &[s0, s1], 3, None).unwrap();
+    let mesh = b.add_mesh(None, vec![prim]);
+    let node = b.add_node(None, Some(mesh), None, None, None);
+    b.set_node_skin(node, skin).unwrap();
+    b.add_scene(None, Some(vec![node, joints[0]]));
+    b
+}
+
 /// Asset metadata plus extras and a known extension (KHR_materials_unlit has an empty payload).
 fn extensions_doc() -> GltfBuilder {
     use mesh_tools::ExtensionTarget as T;
@@ -455,6 +493,8 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("scenes_matrix", scenes_matrix_doc()),
         ("animation", animation_doc()),
         ("skinned", skinned_doc()),
+        ("skinned_u8_weights", skinned_u8_weights_doc()),
+        ("skinned_mixed_sets", skinned_mixed_sets_doc()),
         ("morph", morph_doc()),
         ("extensions", extensions_doc()),
         ("sparse", sparse_doc()),
@@ -524,6 +564,17 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
     assert_eq!(g.document.animations().next().unwrap().channels().count(), 3);
     let g = common::parse_glb(&skinned_doc());
     assert_eq!(g.document.skins().next().unwrap().joints().count(), 2);
+    let g = common::parse_glb(&skinned_u8_weights_doc());
+    let prim = g.document.meshes().next().unwrap().primitives().next().unwrap();
+    let reader = prim.reader(|_| g.blob.as_deref());
+    match reader.read_weights(0).unwrap() {
+        gltf::mesh::util::ReadWeights::U8(it) => assert!(it.into_iter().all(|w| w == [200, 55, 0, 0])),
+        _ => panic!("expected U8 weights"),
+    }
+    let g = common::parse_glb(&skinned_mixed_sets_doc());
+    let skin = g.document.skins().next().unwrap();
+    assert!(skin.inverse_bind_matrices().is_none());
+    assert_eq!(g.document.meshes().next().unwrap().primitives().next().unwrap().get(&gltf::Semantic::Weights(1)).unwrap().data_type(), gltf::accessor::DataType::F32);
     let g = common::parse_glb(&primitives_doc());
     assert_eq!(g.document.meshes().count(), 7);
     let g = common::parse_glb(&cameras_perspective_doc());

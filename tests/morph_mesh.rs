@@ -13,7 +13,7 @@ fn target() -> MorphTarget {
 
 /// A skinned triangle primitive with `n` morph targets attached.
 fn morphed_primitive(b: &mut GltfBuilder, n: usize) -> Primitive {
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut p = b.create_skinned_primitive(&POS, Some(&[0, 1, 2]), Some(&NRM), None, &[set], 1, None).unwrap();
     if n > 0 {
         let targets: Vec<MorphTarget> = (0..n).map(|_| target()).collect();
@@ -170,7 +170,7 @@ fn mesh_builder_output_equals_the_direct_api() {
 
     // The same data through the direct API. MeshBuilder::with_joints takes u16 joints, so use U16 here.
     let mut direct = GltfBuilder::new();
-    let set = SkinSet { joints: JointIndices::U16(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U16(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut p = direct.create_skinned_primitive(&POS, Some(&[0, 1, 2]), Some(&NRM), None, &[set], 1, None).unwrap();
     direct.attach_morph_targets(&mut p, &[target(), target()]).unwrap();
     direct.add_morphable_mesh(Some("M".into()), vec![p], Some(vec![0.5, 0.0]), Some(vec!["a".into(), "b".into()])).unwrap();

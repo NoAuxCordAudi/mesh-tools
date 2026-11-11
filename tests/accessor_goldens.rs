@@ -70,7 +70,7 @@ fn skin_and_ibm() -> GltfBuilder {
     let j1 = b.add_joint_node(None, Some([0.0, 1.3, 0.0]), None, None);
     b.add_child_to_node(j0, j1).unwrap();
     b.add_skin_from_joints(None, vec![j0, j1], Some(j0)).unwrap();
-    let set = SkinSet { joints: JointIndices::U16(vec![[0; 4], [1, 0, 0, 0], [0; 4]]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U16(vec![[0; 4], [1, 0, 0, 0], [0; 4]]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let p = b.create_skinned_primitive(&[0.0, 0.1, 0.0, 1.0, 0.0, 0.2, 0.0, 1.0, 0.3], Some(&[0, 1, 2]), None, None, &[set], 2, None).unwrap();
     b.add_mesh(None, vec![p]);
     b

@@ -209,7 +209,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Texture Coordinates | ✅ Full | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per material slot, including the specular-glossiness textures; missing sets are validated (`MATERIAL_TEXCOORD_MISSING`). No `KHR_texture_transform` |
 | **Animation** |||||
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
-| | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights |
+| | Skinning | ✅ Full | Skins (joints, skeleton, optional inverse bind matrices, computed or supplied), `add_skinned_node`/`set_node_skin`, any number of `JOINTS_n`/`WEIGHTS_n` sets with `u8`/`u16` joints and `f32` or normalized `u8`/`u16` weights (`SkinWeights`, exact-sum `quantize_u8`/`quantize_u16`); validated (`SKIN_*`, `NODE_SKIN_*`, `SKINNED_*`); see docs/SKINNING.md |
 | **Cameras** |||||
 | | Cameras | ✅ Full | Perspective (`add_perspective_camera`: optional `zfar` for an infinite far plane, optional `aspectRatio`) and orthographic (`add_orthographic_camera`) cameras, node references, camera/projection `extras`/`extensions`; ranges validated (`CAMERA_*`); see docs/CAMERAS.md |
 | **Extensions** |||||

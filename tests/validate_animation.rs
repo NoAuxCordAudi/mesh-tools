@@ -5,12 +5,17 @@ use mesh_tools::{CubicKeyframe, GltfBuilder, GltfError, InterpolationType, Joint
 const POS: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
 fn morph_node(b: &mut GltfBuilder, m: usize) -> usize {
-    let set = SkinSet { joints: JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = SkinSet::new(JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut p = b.create_skinned_primitive(&POS, Some(&[0, 1, 2]), None, None, &[set], 1, None).unwrap();
     let targets: Vec<MorphTarget> = (0..m).map(|_| MorphTarget::new().with_positions(vec![0.0; 9])).collect();
     b.attach_morph_targets(&mut p, &targets).unwrap();
     let mesh = b.add_morphable_mesh(None, vec![p], None, None).unwrap();
-    b.add_node(None, Some(mesh), None, None, None)
+    let node = b.add_node(None, Some(mesh), None, None, None);
+    // The mesh has JOINTS_0, so give the node a skin (otherwise SKINNED_MESH_WITHOUT_SKIN warns).
+    let joint = b.add_joint_node(None, None, None, None);
+    let skin = b.add_skin(None, vec![joint], None, None).unwrap();
+    b.set_node_skin(node, skin).unwrap();
+    node
 }
 
 struct Doc {

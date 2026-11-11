@@ -58,6 +58,7 @@ pub struct MeshBuilder {
     texcoords: Option<Vec<Vec<f32>>>,
     joints: Option<Vec<[u16; 4]>>,
     weights: Option<Vec<[f32; 4]>>,
+    skin_sets: Option<Vec<SkinSet>>,
     joint_count: Option<usize>,
     morph_targets: Option<Vec<MorphTarget>>,
     default_weights: Option<Vec<f32>>,
@@ -83,6 +84,7 @@ impl MeshBuilder {
             texcoords: None,
             joints: None,
             weights: None,
+            skin_sets: None,
             joint_count: None,
             morph_targets: None,
             default_weights: None,
@@ -196,6 +198,14 @@ impl MeshBuilder {
         self
     }
     
+    /// Set the skin influence sets (`JOINTS_n`/`WEIGHTS_n`, one per set), including `u8`/`u16`
+    /// joints and normalized integer weights. Replaces [`with_joints`](Self::with_joints) /
+    /// [`with_weights`](Self::with_weights); combining them is an error at `build_into`.
+    pub fn with_skin_sets(mut self, sets: Vec<SkinSet>) -> Self {
+        self.skin_sets = Some(sets);
+        self
+    }
+
     /// Set the number of joints in the skin this mesh will be used with.
     ///
     /// When set, every joint slot with a non-zero weight is checked against it. When not
@@ -249,7 +259,7 @@ impl MeshBuilder {
     /// deltas need base normals). All data is validated before anything is written, so the
     /// document is unchanged on error.
     pub fn build_into(self, gltf: &mut GltfBuilder) -> Result<usize> {
-        let has_skin_data = self.joints.is_some() || self.weights.is_some() || self.joint_count.is_some();
+        let has_skin_data = self.joints.is_some() || self.weights.is_some() || self.skin_sets.is_some() || self.joint_count.is_some();
         let has_morph_data = self.morph_targets.is_some() || self.default_weights.is_some() || self.target_names.is_some();
 
         if let Some(mut builder_fn) = self.builder {
@@ -282,13 +292,19 @@ impl MeshBuilder {
             return Ok(index);
         }
 
-        let skin_sets = match (self.joints, self.weights) {
-            (Some(joints), Some(weights)) => vec![SkinSet { joints: JointIndices::U16(joints), weights }],
-            (None, None) => Vec::new(),
-            (Some(_), None) => {
+        if self.skin_sets.is_some() && (self.joints.is_some() || self.weights.is_some()) {
+            return Err(GltfError::InvalidInput(
+                "with_skin_sets cannot be combined with with_joints/with_weights".to_string(),
+            ));
+        }
+        let skin_sets = match (self.skin_sets, self.joints, self.weights) {
+            (Some(sets), _, _) => sets,
+            (None, Some(joints), Some(weights)) => vec![SkinSet::new(JointIndices::U16(joints), weights)],
+            (None, None, None) => Vec::new(),
+            (None, Some(_), None) => {
                 return Err(GltfError::InvalidInput("joints were set but weights were not".to_string()));
             }
-            (None, Some(_)) => {
+            (None, None, Some(_)) => {
                 return Err(GltfError::InvalidInput("weights were set but joints were not".to_string()));
             }
         };

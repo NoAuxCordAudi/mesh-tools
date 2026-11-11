@@ -432,7 +432,7 @@ fn spec_gloss_payload_is_still_searched_for_texture_extensions() {
 
 fn morph_mesh(b: &mut GltfBuilder, names: Option<Vec<String>>) -> usize {
     let pos = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    let set = mesh_tools::SkinSet { joints: mesh_tools::JointIndices::U8(vec![[0; 4]; 3]), weights: vec![[1.0, 0.0, 0.0, 0.0]; 3] };
+    let set = mesh_tools::SkinSet::new(mesh_tools::JointIndices::U8(vec![[0; 4]; 3]), vec![[1.0, 0.0, 0.0, 0.0]; 3]);
     let mut p = b.create_skinned_primitive(&pos, Some(&[0, 1, 2]), None, None, &[set], 1, None).unwrap();
     let targets = vec![
         mesh_tools::MorphTarget::new().with_positions(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
