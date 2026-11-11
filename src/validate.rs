@@ -20,7 +20,7 @@
 //! Warnings never block export.
 
 use crate::builder::GltfBuilder;
-use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
+use crate::builder_animation::{expected_output_count, interpolation_from_str, output_component_allowed, AnimationPath, InterpolationType};
 use crate::accessor::{component_size, decode_element, element_size, integer_range, type_shape};
 use crate::constants::buffer_view_target;
 use crate::sampler::{MagFilter, MinFilter, WrapMode};
@@ -1077,9 +1077,13 @@ impl<'a> Doc<'a> {
         let (Some(input), Some(output)) = (self.accessors.get(sampler.input), self.accessors.get(sampler.output)) else { return };
 
         // Rotation and weights may legally use normalized integer outputs; translation and scale may not.
-        let float = output.component_type == 5126;
-        let normalized_int = matches!(output.component_type, 5120..=5123) && output.normalized == Some(true);
-        let type_ok = output.type_ == expected_type && (float || (normalized_int && matches!(path, "rotation" | "weights")));
+        let anim_path = match path {
+            "translation" => AnimationPath::Translation,
+            "rotation" => AnimationPath::Rotation,
+            "scale" => AnimationPath::Scale,
+            _ => AnimationPath::Weights,
+        };
+        let type_ok = output.type_ == expected_type && output_component_allowed(anim_path, output.component_type, output.normalized);
         if !type_ok {
             r.errors.push(format!(
                 "ANIMATION_OUTPUT_TYPE: {at}: sampler {} output accessor {} is {} with component type {}{}, expected {expected_type} {}",
@@ -1123,6 +1127,41 @@ impl<'a> Doc<'a> {
                 sampler.output,
                 output.count
             ));
+        } else if path == "rotation" {
+            self.check_rotation_unit(&at, sampler.output, interpolation == InterpolationType::CubicSpline, r);
+        }
+    }
+
+    /// Stored rotation quaternions (the value entries only, for cubic splines) must be unit
+    /// length. Normalized integers are decoded with the glTF formulas and judged with their
+    /// quantization step as tolerance (`1.05 / max`, the worst case for a quantized unit
+    /// quaternion); floats use the node rotation tolerance. Reports the first offender.
+    fn check_rotation_unit(&self, at: &str, output: usize, cubic: bool, r: &mut ValidationReport) {
+        let Some((a, elems)) = self.accessor_elements(output).filter(|(a, _)| a.sparse.is_none() && a.type_ == "VEC4") else { return };
+        let (scale, tolerance) = match (a.component_type, a.normalized == Some(true)) {
+            (5126, _) => (None, crate::builder_node::UNIT_TOLERANCE),
+            (5120, true) => (Some(127.0), 1.05 / 127.0),
+            (5122, true) => (Some(32767.0), 1.05 / 32767.0),
+            (5121, true) => (Some(255.0), 1.05 / 255.0),
+            (5123, true) => (Some(65535.0), 1.05 / 65535.0),
+            _ => return,
+        };
+        for (e, bytes) in elems.enumerate() {
+            if cubic && e % 3 != 1 {
+                continue;
+            }
+            let Some(raw) = decode_element(a.component_type, &a.type_, bytes) else { return };
+            // Signed normalized: max(c / max, -1); unsigned: c / max.
+            let q: Vec<f64> = raw.iter().map(|&c| scale.map_or(c, |m| (c / m).max(-1.0))).collect();
+            if q.iter().any(|v| !v.is_finite()) {
+                return; // reported as ACCESSOR_DATA_NONFINITE
+            }
+            let len = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if (len - 1.0).abs() > tolerance {
+                let keyframe = if cubic { e / 3 } else { e };
+                r.errors.push(format!("ANIMATION_ROTATION_NOT_UNIT: {at}: keyframe {keyframe} rotation {q:?} has length {len}"));
+                return;
+            }
         }
     }
 
@@ -1369,6 +1408,11 @@ impl<'a> Doc<'a> {
         let elem = element_size(a.component_type, &a.type_)?;
         let start = view.byte_offset.checked_add(a.byte_offset.unwrap_or(0))?;
         let stride = view.byte_stride.unwrap_or(elem);
+        // A stride below the element size is invalid; with stride 0 a huge `count` would pass the
+        // range check below and make the readers allocate without bound.
+        if stride < elem {
+            return None;
+        }
         let end = stride.checked_mul(a.count.checked_sub(1)?)?.checked_add(elem)?.checked_add(start)?;
         if end > view.byte_offset.checked_add(view.byte_length)? {
             return None;
@@ -1393,6 +1437,24 @@ impl<'a> Doc<'a> {
         let (a, elems) = self.accessor_elements(index)?;
         (a.component_type == 5126)
             .then(|| elems.flat_map(|e| e.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))).collect())
+    }
+
+    /// Stored keyframe times: non-negative and strictly increasing. Non-finite times are left to
+    /// `ACCESSOR_DATA_NONFINITE`; a wrong `min`/`max` to `ACCESSOR_BOUNDS_MISMATCH`.
+    fn check_times(&self, ai: usize, si: usize, input: usize, r: &mut ValidationReport) {
+        if self.accessors.get(input).is_none_or(|a| a.sparse.is_some() || a.type_ != "SCALAR") {
+            return;
+        }
+        let Some(t) = self.read_f32(input).filter(|t| t.iter().all(|v| v.is_finite())) else { return };
+        if let Some(k) = t.iter().position(|&v| v < 0.0) {
+            r.errors.push(format!("ANIMATION_INPUT_NEGATIVE: animation {ai} sampler {si} input accessor {input} keyframe {k} time {} is negative", t[k]));
+        }
+        if let Some(k) = (1..t.len()).find(|&k| t[k] <= t[k - 1]) {
+            r.errors.push(format!(
+                "ANIMATION_INPUT_NOT_INCREASING: animation {ai} sampler {si} input accessor {} keyframe {k} time {} is not greater than the previous {}",
+                input, t[k], t[k - 1]
+            ));
+        }
     }
 
     fn check_animations(&self, r: &mut ValidationReport) {
@@ -1422,9 +1484,18 @@ impl<'a> Doc<'a> {
                     if input.min.is_none() || input.max.is_none() {
                         r.errors.push(format!("ANIMATION_INPUT_NO_BOUNDS: animation {ai} sampler {si} input accessor {} lacks min/max", s.input));
                     }
+                    self.check_times(ai, si, s.input, r);
                 }
             }
+            let mut seen: std::collections::HashMap<(usize, &str), usize> = std::collections::HashMap::new();
             for (ci, c) in channels.iter().enumerate() {
+                if let Some(first) = seen.insert((c.target.node, c.target.path.as_str()), ci) {
+                    // Keep the first channel as the reference for later duplicates too.
+                    seen.insert((c.target.node, c.target.path.as_str()), first);
+                    r.errors.push(format!(
+                        "ANIMATION_CHANNEL_DUPLICATE: animation {ai} channel {ci} animates the {} of node {}, like channel {first}", c.target.path, c.target.node
+                    ));
+                }
                 if c.sampler >= samplers.len() {
                     r.errors.push(format!("ANIMATION_CHANNEL_SAMPLER_INVALID: animation {ai} channel {ci} references sampler {}", c.sampler));
                 }
@@ -1603,3 +1674,11 @@ fn is_ancestor_or_self(parents: &[Option<usize>], ancestor: usize, node: usize) 
 
 #[cfg(test)]
 mod hardening_tests;
+
+/// Read a non-sparse FLOAT accessor from the builder's stored bytes (`None` if it is sparse,
+/// not FLOAT, or its view is invalid). Used by the builder to check stored keyframe times.
+pub(crate) fn read_f32_accessor(b: &GltfBuilder, index: usize) -> Option<Vec<f32>> {
+    let doc = Doc::new(b);
+    doc.accessors.get(index).filter(|a| a.sparse.is_none() && a.type_ == "SCALAR")?;
+    doc.read_f32(index)
+}

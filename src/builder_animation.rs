@@ -23,8 +23,14 @@
 //!   never from the caller: `LINEAR`/`STEP` outputs hold `N * M` values and `CUBICSPLINE`
 //!   outputs `3 * N * M`, laid out per keyframe as `[in-tangents(M), values(M), out-tangents(M)]`.
 //! - Animation data buffer views have no `target`.
+//! - Sampler inputs are checked against the *stored* data as well, so a hand-made time accessor
+//!   with decreasing or negative times is refused by [`add_animation_sampler`](GltfBuilder::add_animation_sampler),
+//!   with the same rules the validator applies (`ANIMATION_INPUT_NOT_INCREASING`,
+//!   `ANIMATION_INPUT_NEGATIVE`, `ANIMATION_CHANNEL_DUPLICATE`).
+//! - `translation` and `scale` outputs are `FLOAT`; `rotation` and `weights` outputs may also be
+//!   normalized integers (see [`NormalizedComponent`]).
 
-use crate::accessor::{AccessorSpec, AccessorType, Bounds};
+use crate::accessor::{AccessorSpec, AccessorType, Bounds, Component};
 use crate::builder::GltfBuilder;
 use crate::error::{GltfError, Result};
 use crate::models::{Animation, AnimationChannel, AnimationChannelTarget, AnimationSampler};
@@ -60,6 +66,56 @@ impl AnimationPath {
             AnimationPath::Rotation => AccessorType::Vec4,
             AnimationPath::Weights => AccessorType::Scalar,
         }
+    }
+}
+
+/// Integer component type of a normalized rotation or weights output.
+///
+/// Values are stored with the glTF formulas: signed `c = round(f * 127)` (`i16`: `32767`), so
+/// `-128` / `-32768` are never written; unsigned `c = round(f * 255)` (`u16`: `65535`). Rounding
+/// is half away from zero. Unsigned types cannot hold negative values; signed types hold
+/// `[-1, 1]`, unsigned `[0, 1]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NormalizedComponent {
+    I8,
+    U8,
+    I16,
+    U16,
+}
+
+impl NormalizedComponent {
+    fn max(self) -> f64 {
+        match self {
+            NormalizedComponent::I8 => 127.0,
+            NormalizedComponent::U8 => 255.0,
+            NormalizedComponent::I16 => 32767.0,
+            NormalizedComponent::U16 => 65535.0,
+        }
+    }
+
+    fn signed(self) -> bool {
+        matches!(self, NormalizedComponent::I8 | NormalizedComponent::I16)
+    }
+
+    /// Reject values the integer type cannot hold; `what` names the entry for the message.
+    fn check(self, v: f32, keyframe: usize, what: &str) -> Result<()> {
+        if !self.signed() && v < 0.0 {
+            return Err(invalid(format!(
+                "keyframe {keyframe}: {what} {v} is negative, but {self:?} normalized output holds only [0, 1]"
+            )));
+        }
+        if v > 1.0 || (self.signed() && v < -1.0) {
+            return Err(invalid(format!(
+                "keyframe {keyframe}: {what} {v} is outside [{}, 1], the range of {self:?} normalized output",
+                if self.signed() { "-1" } else { "0" }
+            )));
+        }
+        Ok(())
+    }
+
+    /// `round(f * max)`; the caller has range-checked `f`.
+    fn encode(self, f: f32) -> i32 {
+        (f64::from(f) * self.max()).round() as i32
     }
 }
 
@@ -156,6 +212,10 @@ impl GltfBuilder {
             check_output_count(input.count, output.count, interpolation)
         };
         counts.map_err(|m| invalid(format!("sampler output accessor {output_accessor}: {m}")))?;
+        // Stored times (when readable) obey the same rules as the track functions enforce.
+        if let Some(times) = crate::validate::read_f32_accessor(self, input_accessor) {
+            validate_times(&times).map_err(|e| invalid(format!("sampler input accessor {input_accessor}: {e}")))?;
+        }
         Ok(self.push_sampler(animation_index, input_accessor, output_accessor, interpolation))
     }
 
@@ -199,6 +259,18 @@ impl GltfBuilder {
                 target_path.output_type().as_str()
             )));
         }
+        if !output_component_allowed(target_path, output.component_type, output.normalized) {
+            return Err(invalid(format!(
+                "sampler {sampler_index} output accessor has component type {}{}, but the {target_path} path needs {}",
+                output.component_type,
+                if output.normalized == Some(true) { " (normalized)" } else { "" },
+                if matches!(target_path, AnimationPath::Rotation | AnimationPath::Weights) {
+                    "FLOAT or normalized integer components"
+                } else {
+                    "FLOAT components"
+                }
+            )));
+        }
         if target_path == AnimationPath::Weights {
             let m = self.node_morph_target_count(target_node)?;
             let input_count = self.accessor_info(sampler.input)?.count;
@@ -212,6 +284,50 @@ impl GltfBuilder {
             }
         }
         Ok(self.push_channel(animation_index, sampler_index, target_node, target_path))
+    }
+
+    /// Add a channel that reuses an existing sampler, so several nodes share one set of
+    /// keyframes (for instance the same translation curve on many nodes) without writing the
+    /// data again.
+    ///
+    /// Same checks as [`add_animation_channel`](Self::add_animation_channel): the sampler's output
+    /// is judged against the target `path`, the node and its morph target count. Nothing is added
+    /// on error.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the animation, sampler or node does not exist, the node has a
+    /// `matrix` (except for weights), `(node, path)` already has a channel in this animation, or
+    /// the sampler's output cannot drive `path` on that node.
+    ///
+    /// # Returns
+    ///
+    /// The index of the created channel within the animation
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::{AnimationPath, GltfBuilder, InterpolationType};
+    ///
+    /// let mut b = GltfBuilder::new();
+    /// let (n1, n2) = (b.add_node(None, None, None, None, None), b.add_node(None, None, None, None, None));
+    /// let anim = b.add_animation(None);
+    /// let (_, sampler) = b
+    ///     .add_translation_track(anim, n1, &[0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]], InterpolationType::Linear)?;
+    /// let channel = b.add_channel_with_sampler(anim, sampler, n2, AnimationPath::Translation)?;
+    /// assert_eq!(channel, 1);
+    /// // Animating the same (node, path) twice is refused.
+    /// assert!(b.add_channel_with_sampler(anim, sampler, n2, AnimationPath::Translation).is_err());
+    /// # Ok::<(), mesh_tools::GltfError>(())
+    /// ```
+    pub fn add_channel_with_sampler(
+        &mut self,
+        animation_index: usize,
+        sampler_index: usize,
+        target_node: usize,
+        target_path: AnimationPath,
+    ) -> Result<usize> {
+        self.add_animation_channel(animation_index, sampler_index, target_node, target_path)
     }
 
     /// Animate a node's translation.
@@ -367,18 +483,8 @@ impl GltfBuilder {
         interpolation: InterpolationType,
     ) -> Result<(usize, usize)> {
         reject_cubic(interpolation, "add_cubic_weights_track")?;
-        self.check_animation(animation_index)?;
-        let m = self.node_morph_target_count(node_index)?;
-        let mut flat = Vec::with_capacity(values.len() * m);
-        for (k, row) in values.iter().enumerate() {
-            if row.len() != m {
-                return Err(invalid(format!(
-                    "keyframe {k}: {} weights but node {node_index}'s mesh has {m} morph targets", row.len()
-                )));
-            }
-            flat.extend_from_slice(row);
-        }
-        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, values.len(), m, interpolation)
+        let (m, flat) = self.flatten_weights(animation_index, node_index, values)?;
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, values.len(), m, interpolation, None)
     }
 
     /// Animate a node's morph target weights with cubic-spline keyframes (at least two).
@@ -400,22 +506,138 @@ impl GltfBuilder {
         times: &[f32],
         keyframes: &[CubicKeyframe<Vec<f32>>],
     ) -> Result<(usize, usize)> {
-        self.check_animation(animation_index)?;
-        let m = self.node_morph_target_count(node_index)?;
-        let mut flat = Vec::with_capacity(keyframes.len() * m * 3);
-        for (k, kf) in keyframes.iter().enumerate() {
-            for (what, v) in [("in_tangent", &kf.in_tangent), ("value", &kf.value), ("out_tangent", &kf.out_tangent)] {
-                if v.len() != m {
-                    return Err(invalid(format!(
-                        "keyframe {k}: {what} has {} weights but node {node_index}'s mesh has {m} morph targets", v.len()
-                    )));
-                }
-            }
-            flat.extend_from_slice(&kf.in_tangent);
-            flat.extend_from_slice(&kf.value);
-            flat.extend_from_slice(&kf.out_tangent);
+        let (m, flat) = self.flatten_cubic_weights(animation_index, node_index, keyframes)?;
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, keyframes.len(), m, InterpolationType::CubicSpline, None)
+    }
+
+    /// Animate rotation with normalized integer output (see [`NormalizedComponent`]).
+    ///
+    /// Like [`add_rotation_track`](Self::add_rotation_track): quaternions are normalized first and
+    /// then quantized, so the stored quaternion is unit length to within the quantization step
+    /// (the validator checks with that tolerance). Unsigned components reject negative components.
+    ///
+    /// # Errors
+    ///
+    /// Everything `add_rotation_track` rejects, plus a negative component with an unsigned
+    /// `component`. Nothing is added on error.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::{GltfBuilder, InterpolationType, NormalizedComponent};
+    ///
+    /// let mut b = GltfBuilder::new();
+    /// let node = b.add_node(None, None, None, None, None);
+    /// let anim = b.add_animation(None);
+    /// b.add_rotation_track_normalized(
+    ///     anim, node, &[0.0, 1.0],
+    ///     &[[0.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0]],
+    ///     InterpolationType::Linear, NormalizedComponent::I8,
+    /// )?;
+    /// // Unsigned bytes cannot hold -1.
+    /// let other = b.add_animation(None);
+    /// assert!(b.add_rotation_track_normalized(
+    ///     other, node, &[0.0], &[[0.0, 0.0, 0.0, -1.0]],
+    ///     InterpolationType::Linear, NormalizedComponent::U8,
+    /// ).is_err());
+    /// # Ok::<(), mesh_tools::GltfError>(())
+    /// ```
+    pub fn add_rotation_track_normalized(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        values: &[[f32; 4]],
+        interpolation: InterpolationType,
+        component: NormalizedComponent,
+    ) -> Result<(usize, usize)> {
+        reject_cubic(interpolation, "add_cubic_rotation_track_normalized")?;
+        let mut flat = Vec::with_capacity(values.len() * 4);
+        for (k, q) in values.iter().enumerate() {
+            flat.extend_from_slice(&normalize_rotation(*q, k)?);
         }
-        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, keyframes.len(), m, InterpolationType::CubicSpline)
+        let width = 4;
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Rotation, times, &flat, values.len(), width, interpolation, Some(component))
+    }
+
+    /// Cubic-spline rotation with normalized integer output. Values are normalized, then values
+    /// and tangents are quantized; tangents must lie in the integer type's range (`[-1, 1]` for
+    /// signed, `[0, 1]` for unsigned types).
+    ///
+    /// # Errors
+    ///
+    /// As for [`add_cubic_rotation_track`](Self::add_cubic_rotation_track), plus values or tangents
+    /// outside the range of `component`. Nothing is added on error.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    pub fn add_cubic_rotation_track_normalized(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        keyframes: &[CubicKeyframe<[f32; 4]>],
+        component: NormalizedComponent,
+    ) -> Result<(usize, usize)> {
+        let mut normalized = Vec::with_capacity(keyframes.len());
+        for (k, kf) in keyframes.iter().enumerate() {
+            normalized.push(CubicKeyframe { value: normalize_rotation(kf.value, k)?, ..*kf });
+        }
+        let flat = flatten_cubic(&normalized, |v| *v);
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Rotation, times, &flat, keyframes.len(), 4, InterpolationType::CubicSpline, Some(component))
+    }
+
+    /// Morph target weights with normalized integer output. Weights must lie in the range of
+    /// `component` (`[-1, 1]` signed, `[0, 1]` unsigned); they are not clamped.
+    ///
+    /// # Errors
+    ///
+    /// As for [`add_weights_track`](Self::add_weights_track), plus a weight outside the range of
+    /// `component`. Nothing is added on error.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    pub fn add_weights_track_normalized(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        values: &[Vec<f32>],
+        interpolation: InterpolationType,
+        component: NormalizedComponent,
+    ) -> Result<(usize, usize)> {
+        reject_cubic(interpolation, "add_cubic_weights_track_normalized")?;
+        let (m, flat) = self.flatten_weights(animation_index, node_index, values)?;
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, values.len(), m, interpolation, Some(component))
+    }
+
+    /// Cubic-spline morph target weights with normalized integer output; values and tangents
+    /// must lie in the range of `component`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`add_cubic_weights_track`](Self::add_cubic_weights_track), plus a value or tangent
+    /// outside the range of `component`. Nothing is added on error.
+    ///
+    /// # Returns
+    ///
+    /// The indices of the created channel and sampler
+    pub fn add_cubic_weights_track_normalized(
+        &mut self,
+        animation_index: usize,
+        node_index: usize,
+        times: &[f32],
+        keyframes: &[CubicKeyframe<Vec<f32>>],
+        component: NormalizedComponent,
+    ) -> Result<(usize, usize)> {
+        let (m, flat) = self.flatten_cubic_weights(animation_index, node_index, keyframes)?;
+        self.add_track_with_width(animation_index, node_index, AnimationPath::Weights, times, &flat, keyframes.len(), m, InterpolationType::CubicSpline, Some(component))
     }
 
     /// Create translation keyframes for an animation.
@@ -463,6 +685,42 @@ impl GltfBuilder {
 
     // ---------------------------------------------------------------- internals
 
+    /// Morph target count of the node's mesh and the rows flattened, each checked for width.
+    fn flatten_weights(&self, animation_index: usize, node_index: usize, values: &[Vec<f32>]) -> Result<(usize, Vec<f32>)> {
+        self.check_animation(animation_index)?;
+        let m = self.node_morph_target_count(node_index)?;
+        let mut flat = Vec::with_capacity(values.len() * m);
+        for (k, row) in values.iter().enumerate() {
+            if row.len() != m {
+                return Err(invalid(format!(
+                    "keyframe {k}: {} weights but node {node_index}'s mesh has {m} morph targets", row.len()
+                )));
+            }
+            flat.extend_from_slice(row);
+        }
+        Ok((m, flat))
+    }
+
+    /// Like `flatten_weights` for cubic keyframes: `[in, value, out]` per keyframe.
+    fn flatten_cubic_weights(&self, animation_index: usize, node_index: usize, keyframes: &[CubicKeyframe<Vec<f32>>]) -> Result<(usize, Vec<f32>)> {
+        self.check_animation(animation_index)?;
+        let m = self.node_morph_target_count(node_index)?;
+        let mut flat = Vec::with_capacity(keyframes.len() * m * 3);
+        for (k, kf) in keyframes.iter().enumerate() {
+            for (what, v) in [("in_tangent", &kf.in_tangent), ("value", &kf.value), ("out_tangent", &kf.out_tangent)] {
+                if v.len() != m {
+                    return Err(invalid(format!(
+                        "keyframe {k}: {what} has {} weights but node {node_index}'s mesh has {m} morph targets", v.len()
+                    )));
+                }
+            }
+            flat.extend_from_slice(&kf.in_tangent);
+            flat.extend_from_slice(&kf.value);
+            flat.extend_from_slice(&kf.out_tangent);
+        }
+        Ok((m, flat))
+    }
+
     /// Validate fully, then write the time accessor, output accessor, sampler and channel.
     /// `data` is the flattened output; `keyframes` the number of keyframes it represents.
     fn add_track(
@@ -476,11 +734,12 @@ impl GltfBuilder {
         interpolation: InterpolationType,
     ) -> Result<(usize, usize)> {
         let width = if path == AnimationPath::Rotation { 4 } else { 3 };
-        self.add_track_with_width(animation_index, node_index, path, times, data, keyframes, width, interpolation)
+        self.add_track_with_width(animation_index, node_index, path, times, data, keyframes, width, interpolation, None)
     }
 
     /// Like `add_track`, with an explicit number of floats per keyframe element (3 for
-    /// translation/scale, 4 for rotation, the morph target count for weights).
+    /// translation/scale, 4 for rotation, the morph target count for weights). With `normalized`,
+    /// the floats are range-checked and written as that integer type.
     #[allow(clippy::too_many_arguments)]
     fn add_track_with_width(
         &mut self,
@@ -492,6 +751,7 @@ impl GltfBuilder {
         keyframes: usize,
         width: usize,
         interpolation: InterpolationType,
+        normalized: Option<NormalizedComponent>,
     ) -> Result<(usize, usize)> {
         self.check_animation(animation_index)?;
         self.check_channel_target(animation_index, node_index, path)?;
@@ -517,14 +777,45 @@ impl GltfBuilder {
             return Err(invalid(format!("{path} output value {i} is not finite")));
         }
 
+        if let Some(c) = normalized {
+            // Per keyframe: one value, or in-tangent, value, out-tangent.
+            let per_key = width * if plain { 1 } else { 3 };
+            for (i, &v) in data.iter().enumerate() {
+                let what = match (plain, (i % per_key) / width) {
+                    (true, _) | (false, 1) => "value",
+                    (false, 0) => "in_tangent",
+                    _ => "out_tangent",
+                };
+                c.check(v, i / per_key, what)?;
+            }
+        }
+
         // ---- validated; write ----
         // Animation data is not vertex/index data, so the buffer views have no target. The input
         // carries min/max; the output has none.
         let input_accessor = self.write_slice(times, AccessorType::Scalar, &AccessorSpec::new().with_bounds(Bounds::Compute));
-        let output_accessor = self.write_slice(data, path.output_type(), &AccessorSpec::new());
+        let output_accessor = match normalized {
+            None => self.write_slice(data, path.output_type(), &AccessorSpec::new()),
+            Some(c) => self.write_normalized(data, path.output_type(), c),
+        };
         let sampler = self.push_sampler(animation_index, input_accessor, output_accessor, interpolation);
         let channel = self.push_channel(animation_index, sampler, node_index, path);
         Ok((channel, sampler))
+    }
+
+    /// Quantize `data` (already range-checked) and write it as a normalized accessor.
+    fn write_normalized(&mut self, data: &[f32], ty: AccessorType, c: NormalizedComponent) -> usize {
+        fn put<C: Component>(b: &mut GltfBuilder, q: Vec<C>, ty: AccessorType) -> usize {
+            b.write_slice(&q, ty, &AccessorSpec::new().with_normalized(true))
+        }
+        // Signed values stay within +-max, so -128 / -32768 cannot occur.
+        let it = data.iter().map(|&f| c.encode(f));
+        match c {
+            NormalizedComponent::I8 => put(self, it.map(|v| v as i8).collect(), ty),
+            NormalizedComponent::U8 => put(self, it.map(|v| v as u8).collect(), ty),
+            NormalizedComponent::I16 => put(self, it.map(|v| v as i16).collect(), ty),
+            NormalizedComponent::U16 => put(self, it.map(|v| v as u16).collect(), ty),
+        }
     }
 
     fn push_sampler(&mut self, animation: usize, input: usize, output: usize, interpolation: InterpolationType) -> usize {
@@ -607,14 +898,24 @@ impl GltfBuilder {
     fn accessor_info(&self, index: usize) -> Result<AccessorInfo> {
         let a = self.gltf.accessors.as_ref().and_then(|a| a.get(index))
             .ok_or_else(|| invalid(format!("accessor {index} does not exist")))?;
-        Ok(AccessorInfo { type_: a.type_.clone(), component_type: a.component_type, count: a.count })
+        Ok(AccessorInfo { type_: a.type_.clone(), component_type: a.component_type, normalized: a.normalized, count: a.count })
     }
 }
 
 struct AccessorInfo {
     type_: String,
     component_type: usize,
+    normalized: Option<bool>,
     count: usize,
+}
+
+/// Whether an accessor with these components may be the output of a `path` channel: `FLOAT`
+/// anywhere, normalized integers only for rotation and weights. Shared with the validator.
+pub(crate) fn output_component_allowed(path: AnimationPath, component_type: usize, normalized: Option<bool>) -> bool {
+    component_type == 5126
+        || (matches!(component_type, 5120..=5123)
+            && normalized == Some(true)
+            && matches!(path, AnimationPath::Rotation | AnimationPath::Weights))
 }
 
 /// `LINEAR`/`STEP`: output count == input count. `CUBICSPLINE`: output == 3 * input, input >= 2.

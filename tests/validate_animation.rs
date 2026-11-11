@@ -216,3 +216,151 @@ fn export_refuses_inconsistent_animation_output() {
     let Err(GltfError::InvalidData(msg)) = d.b.to_glb_bytes() else { panic!("expected InvalidData") };
     assert!(msg.contains("ANIMATION_OUTPUT_COUNT") && msg.contains("2 morph targets"), "{msg}");
 }
+
+// ---- validator checks on stored animation data ----
+//
+// The builder refuses bad data, so these documents are broken by pointing a sampler at an
+// accessor that holds the bad values (written through the public accessor writer).
+
+use mesh_tools::{AccessorSpec, AccessorType, Bounds, Component, NormalizedComponent};
+
+fn redirect_input(d: &mut Doc, ch: usize, times: &[f32]) {
+    let acc = d.b.add_accessor_from_slice(times, AccessorType::Scalar, AccessorSpec::new().with_bounds(Bounds::Compute)).unwrap();
+    d.sampler_of(ch).input = acc;
+}
+
+fn redirect_output<C: Component>(d: &mut Doc, ch: usize, ty: AccessorType, data: &[C], normalized: bool) {
+    let acc = d.b.add_accessor_from_slice(data, ty, AccessorSpec::new().with_normalized(normalized)).unwrap();
+    d.sampler_of(ch).output = acc;
+}
+
+#[test]
+fn stored_times_must_be_strictly_increasing_and_non_negative() {
+    let errs = assert_error("ANIMATION_INPUT_NOT_INCREASING", |d| redirect_input(d, TRANSLATION, &[0.0, 2.0, 1.0]));
+    assert!(errs.iter().any(|e| e.contains("ANIMATION_INPUT_NOT_INCREASING") && e.contains("keyframe 2")), "{errs:#?}");
+    // Equal times are not increasing.
+    assert_error("ANIMATION_INPUT_NOT_INCREASING", |d| redirect_input(d, TRANSLATION, &[0.0, 1.0, 1.0]));
+    assert_error("ANIMATION_INPUT_NEGATIVE", |d| redirect_input(d, TRANSLATION, &[-1.0, 0.0, 1.0]));
+    // A valid replacement stays valid.
+    let mut d = doc();
+    redirect_input(&mut d, TRANSLATION, &[0.0, 0.25, 9.0]);
+    assert!(d.b.validate().is_valid(), "{:#?}", d.b.validate());
+}
+
+#[test]
+fn stored_time_bounds_mismatch_is_reported_by_the_accessor_check() {
+    // No separate animation code: the generic accessor rule covers the input's min/max.
+    assert_error("ACCESSOR_BOUNDS_MISMATCH", |d| {
+        let acc = d.input_acc(TRANSLATION);
+        acc.max = Some(vec![5.0]);
+    });
+}
+
+fn copy_channel(d: &mut Doc, ch: usize) -> mesh_tools::AnimationChannel {
+    let c = d.channel(ch);
+    mesh_tools::AnimationChannel {
+        sampler: 0,
+        target: mesh_tools::AnimationChannelTarget { node: c.target.node, path: c.target.path.clone(), ..Default::default() },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn one_channel_per_node_and_path_in_an_animation() {
+    let errs = assert_error("ANIMATION_CHANNEL_DUPLICATE", |d| {
+        let c = copy_channel(d, TRANSLATION);
+        d.b.gltf.animations.as_mut().unwrap()[0].channels.as_mut().unwrap().push(c);
+    });
+    assert!(errs.iter().any(|e| e.contains("ANIMATION_CHANNEL_DUPLICATE") && e.contains("channel 5") && e.contains("channel 0")), "{errs:#?}");
+    // The same pair in a different animation is fine.
+    let mut d = doc();
+    let c = copy_channel(&mut d, TRANSLATION);
+    let s = &d.b.gltf.animations.as_ref().unwrap()[0].samplers.as_ref().unwrap()[0];
+    let s = mesh_tools::AnimationSampler { input: s.input, output: s.output, interpolation: s.interpolation.clone(), ..Default::default() };
+    d.b.gltf.animations.as_mut().unwrap().push(mesh_tools::Animation { channels: Some(vec![c]), samplers: Some(vec![s]), ..Default::default() });
+    assert!(!d.b.validate().has_error("ANIMATION_CHANNEL_DUPLICATE"));
+}
+
+#[test]
+fn stored_float_rotations_must_be_unit_length() {
+    let errs = assert_error("ANIMATION_ROTATION_NOT_UNIT", |d| {
+        redirect_output(d, ROTATION, AccessorType::Vec4, &[0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0], false);
+    });
+    assert!(errs.iter().any(|e| e.contains("ANIMATION_ROTATION_NOT_UNIT") && e.contains("keyframe 1")), "{errs:#?}");
+    assert_error("ANIMATION_ROTATION_NOT_UNIT", |d| redirect_output(d, ROTATION, AccessorType::Vec4, &[0.0f32; 12], false));
+    // Valid replacement.
+    let mut d = doc();
+    redirect_output(&mut d, ROTATION, AccessorType::Vec4, &[0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0], false);
+    assert!(d.b.validate().is_valid(), "{:#?}", d.b.validate());
+}
+
+#[test]
+fn only_cubic_rotation_values_are_checked_not_tangents() {
+    let mut b = GltfBuilder::new();
+    let n = b.add_node(None, None, None, None, None);
+    b.add_scene(None, Some(vec![n]));
+    let a = b.add_animation(None);
+    let kf = |v: [f32; 4]| CubicKeyframe { in_tangent: [5.0; 4], value: v, out_tangent: [-5.0; 4] };
+    b.add_cubic_rotation_track(a, n, &[0.0, 1.0], &[kf([0.0, 0.0, 0.0, 1.0]), kf([0.0, 1.0, 0.0, 0.0])]).unwrap();
+    assert!(b.validate().is_valid(), "{:#?}", b.validate());
+    // Replace the output: tangents wild, but keyframe 1's *value* (element 4) has length 3.
+    let mut data = vec![5.0f32; 4];
+    data.extend([0.0, 0.0, 0.0, 1.0]);
+    data.extend([-5.0f32; 4]);
+    data.extend([5.0f32; 4]);
+    data.extend([3.0, 0.0, 0.0, 0.0]);
+    data.extend([-5.0f32; 4]);
+    let acc = b.add_accessor_from_slice(&data, AccessorType::Vec4, AccessorSpec::new()).unwrap();
+    b.gltf.animations.as_mut().unwrap()[0].samplers.as_mut().unwrap()[0].output = acc;
+    let r = b.validate();
+    assert!(r.has_error("ANIMATION_ROTATION_NOT_UNIT") && r.errors.iter().any(|e| e.contains("keyframe 1")), "{:#?}", r.errors);
+}
+
+#[test]
+fn normalized_integer_rotations_are_checked_with_their_quantization_tolerance() {
+    let mut b = GltfBuilder::new();
+    let n = b.add_node(None, None, None, None, None);
+    b.add_scene(None, Some(vec![n]));
+    let q = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.70710678, 0.0, 0.70710678]];
+    for c in [NormalizedComponent::I8, NormalizedComponent::U8, NormalizedComponent::I16, NormalizedComponent::U16] {
+        let a = b.add_animation(None);
+        b.add_rotation_track_normalized(a, n, &[0.0, 1.0], &q, InterpolationType::Linear, c).unwrap();
+    }
+    assert!(b.validate().is_valid(), "{:#?}", b.validate());
+    // (0, 100, 0, 100) / 127 has length 1.11: not unit.
+    let acc = b.add_accessor_from_slice(&[0i8, 0, 0, 127, 0, 100, 0, 100], AccessorType::Vec4, AccessorSpec::new().with_normalized(true)).unwrap();
+    b.gltf.animations.as_mut().unwrap()[0].samplers.as_mut().unwrap()[0].output = acc;
+    assert!(b.validate().has_error("ANIMATION_ROTATION_NOT_UNIT"));
+}
+
+#[test]
+fn builder_and_validator_agree_on_times_and_duplicates() {
+    // The builder rejects bad times and duplicate (node, path) at write time with the same rules.
+    let mut b = GltfBuilder::new();
+    let n = b.add_node(None, None, None, None, None);
+    let a = b.add_animation(None);
+    let z = [[0.0; 3]; 2];
+    assert!(b.add_translation_track(a, n, &[1.0, 1.0], &z, InterpolationType::Linear).is_err());
+    assert!(b.add_translation_track(a, n, &[-1.0, 1.0], &z, InterpolationType::Linear).is_err());
+    b.add_translation_track(a, n, &[0.0, 1.0], &z, InterpolationType::Linear).unwrap();
+    assert!(b.add_translation_track(a, n, &[0.0, 1.0], &z, InterpolationType::Linear).is_err());
+}
+
+#[test]
+fn zero_stride_with_huge_count_neither_hangs_nor_aborts() {
+    use mesh_tools::{GltfBuilder, InterpolationType};
+    let mut b = GltfBuilder::new();
+    let a = b.add_animation(None);
+    let n = b.add_node(None, None, None, None, None);
+    let (_, s) = b
+        .add_translation_track(a, n, &[0.0, 1.0], &[[0.0; 3], [1.0, 0.0, 0.0]], InterpolationType::Linear)
+        .unwrap();
+    let sampler = &b.gltf.animations.as_ref().unwrap()[a].samplers.as_ref().unwrap()[s];
+    let (inp, out) = (sampler.input, sampler.output);
+    let v = b.gltf.accessors.as_ref().unwrap()[inp].buffer_view.unwrap();
+    b.gltf.buffer_views.as_mut().unwrap()[v].byte_stride = Some(0);
+    b.gltf.accessors.as_mut().unwrap()[inp].count = 1usize << 40;
+    // The stored times are unreadable, so neither call may hang or abort.
+    let _ = b.add_animation_sampler(a, inp, out, InterpolationType::Linear);
+    let _ = b.validate();
+}

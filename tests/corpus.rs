@@ -14,7 +14,7 @@
 mod common;
 
 use mesh_tools::mesh::MeshBuilder;
-use mesh_tools::{AccessorSpec, AccessorType, Bounds, SparseSpec, CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, Triangle};
+use mesh_tools::{AccessorSpec, AccessorType, AnimationPath, Bounds, SparseSpec, CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, NormalizedComponent, Triangle};
 use mesh_tools::compat::{point3, vector2, vector3};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -236,6 +236,46 @@ fn animation_doc() -> GltfBuilder {
     .unwrap();
     let k = |v: [f32; 3]| CubicKeyframe { in_tangent: [0.0; 3], value: v, out_tangent: [0.0; 3] };
     b.add_cubic_scale_track(anim, node, &[0.0, 1.0], &[k([1.0; 3]), k([2.0; 3])]).unwrap();
+    b
+}
+
+/// Normalized integer rotation and weights outputs, linear and cubic, on a morphable mesh.
+fn animation_normalized_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let up = MorphTarget::new().with_positions(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+    let mesh = quad_mesh("Morph").with_morph_targets(vec![up]).build_into(&mut b).unwrap();
+    let a = b.add_node(Some("A".into()), Some(mesh), None, None, None);
+    let c = b.add_node(Some("C".into()), Some(mesh), None, None, None);
+    b.add_scene(None, Some(vec![a, c]));
+    let lin = InterpolationType::Linear;
+    let q = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.70710678, 0.0, 0.70710678]];
+    let anim = b.add_animation(Some("Linear".into()));
+    b.add_rotation_track_normalized(anim, a, &[0.0, 1.0], &q, lin, NormalizedComponent::I8).unwrap();
+    b.add_weights_track_normalized(anim, a, &[0.0, 1.0], &[vec![0.0], vec![1.0]], lin, NormalizedComponent::U8).unwrap();
+    let anim = b.add_animation(Some("Cubic".into()));
+    let kq = |v: [f32; 4]| CubicKeyframe { in_tangent: [0.0; 4], value: v, out_tangent: [0.0; 4] };
+    b.add_cubic_rotation_track_normalized(anim, c, &[0.0, 1.0], &[kq(q[0]), kq(q[1])], NormalizedComponent::I16).unwrap();
+    let kw = |v: f32| CubicKeyframe { in_tangent: vec![0.0], value: vec![v], out_tangent: vec![0.0] };
+    b.add_cubic_weights_track_normalized(anim, c, &[0.0, 1.0], &[kw(0.0), kw(1.0)], NormalizedComponent::U16).unwrap();
+    let anim = b.add_animation(Some("Unsigned".into()));
+    b.add_rotation_track_normalized(anim, a, &[0.0, 1.0], &q, lin, NormalizedComponent::U16).unwrap();
+    b.add_weights_track_normalized(anim, a, &[0.0, 1.0], &[vec![-1.0], vec![0.5]], lin, NormalizedComponent::I16).unwrap();
+    b
+}
+
+/// One translation sampler driving three nodes.
+fn animation_shared_sampler_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let mesh = b.create_box(1.0);
+    let nodes: Vec<usize> = (0..3).map(|_| b.add_node(None, Some(mesh), None, None, None)).collect();
+    b.add_scene(None, Some(nodes.clone()));
+    let anim = b.add_animation(Some("Shared".into()));
+    let (_, sampler) = b
+        .add_translation_track(anim, nodes[0], &[0.0, 1.0, 2.0], &[[0.0; 3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]], InterpolationType::Linear)
+        .unwrap();
+    for &n in &nodes[1..] {
+        b.add_channel_with_sampler(anim, sampler, n, AnimationPath::Translation).unwrap();
+    }
     b
 }
 
@@ -492,6 +532,8 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("instancing", instancing_doc()),
         ("scenes_matrix", scenes_matrix_doc()),
         ("animation", animation_doc()),
+        ("animation_normalized", animation_normalized_doc()),
+        ("animation_shared_sampler", animation_shared_sampler_doc()),
         ("skinned", skinned_doc()),
         ("skinned_u8_weights", skinned_u8_weights_doc()),
         ("skinned_mixed_sets", skinned_mixed_sets_doc()),
@@ -562,6 +604,17 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
     assert_eq!(mesh.primitives().next().unwrap().morph_targets().count(), 1);
     let g = common::parse_glb(&animation_doc());
     assert_eq!(g.document.animations().next().unwrap().channels().count(), 3);
+    let g = common::parse_glb(&animation_normalized_doc());
+    let chan = g.document.animations().next().unwrap().channels().next().unwrap();
+    match chan.reader(|_| g.blob.as_deref()).read_outputs().unwrap() {
+        gltf::animation::util::ReadOutputs::Rotations(gltf::animation::util::Rotations::I8(it)) => {
+            assert_eq!(it.collect::<Vec<_>>(), [[0, 0, 0, 127], [0, 90, 0, 90]]); // 0.7071 * 127 = 89.8
+        }
+        _ => panic!("expected I8 rotations"),
+    }
+    let g = common::parse_glb(&animation_shared_sampler_doc());
+    let anim = g.document.animations().next().unwrap();
+    assert_eq!((anim.samplers().count(), anim.channels().count()), (1, 3));
     let g = common::parse_glb(&skinned_doc());
     assert_eq!(g.document.skins().next().unwrap().joints().count(), 2);
     let g = common::parse_glb(&skinned_u8_weights_doc());

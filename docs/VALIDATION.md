@@ -106,6 +106,13 @@ inverse bind matrix view rule maps to a buffer view usage error. The names and s
 from memory, so no negative cross-check is registered for them yet. The `skinned_u8_weights`
 and `skinned_mixed_sets` corpus documents cover normalized integer weights, two influence sets
 and an inverse-bind-matrix-less skin.
+Animation codes (see [ANIMATION.md](ANIMATION.md)): `ANIMATION_INPUT_NOT_INCREASING` and
+`ANIMATION_INPUT_NEGATIVE` correspond to the Khronos `ACCESSOR_ANIMATION_INPUT_NON_INCREASING` and
+`ACCESSOR_ANIMATION_INPUT_NEGATIVE` (errors), `ANIMATION_CHANNEL_DUPLICATE` to
+`ANIMATION_DUPLICATED_TARGETS` (error), `ANIMATION_ROTATION_NOT_UNIT` to `ACCESSOR_NON_UNIT`
+(error). Non-finite keyframe data and a wrong time `min`/`max` reuse `ACCESSOR_DATA_NONFINITE` and
+`ACCESSOR_BOUNDS_MISMATCH` instead of animation-specific copies. The `animation_normalized` and
+`animation_shared_sampler` corpus documents cover normalized integer outputs and sampler reuse.
 These mappings are unverified against a local run of the pinned validator.
 
 The Khronos codes come from the validator's `lib/src/errors.dart` at the pinned version. Later

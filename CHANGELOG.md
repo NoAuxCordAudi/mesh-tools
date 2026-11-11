@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.20.0
+
+Animation. The README Animation row is Full (the Khronos corpus has not been run locally). Output
+for existing float tracks is byte-identical to 0.19.0 (`tests/accessor_goldens.rs`). N4 shipped as
+0.18.0, so this is its own minor.
+
+### Added
+- `NormalizedComponent { I8, U8, I16, U16 }` and `add_rotation_track_normalized`,
+  `add_cubic_rotation_track_normalized`, `add_weights_track_normalized`,
+  `add_cubic_weights_track_normalized` (glTF formulas, never `-128`/`-32768`, out-of-range values
+  are errors). Translation and scale cannot be normalized.
+- `add_channel_with_sampler` (sampler reuse; same checks as `add_animation_channel`).
+- Validator errors `ANIMATION_INPUT_NOT_INCREASING`, `ANIMATION_INPUT_NEGATIVE`,
+  `ANIMATION_CHANNEL_DUPLICATE`, `ANIMATION_ROTATION_NOT_UNIT` (stored data; cubic tangents are
+  not checked). Time `min`/`max` and non-finite data stay with `ACCESSOR_BOUNDS_MISMATCH` and
+  `ACCESSOR_DATA_NONFINITE` (no animation-specific duplicates).
+- docs/ANIMATION.md (doctested), corpus documents `animation_normalized` and
+  `animation_shared_sampler`.
+
+### Changed
+- `add_animation_sampler` reads the stored times of the input accessor and rejects non-finite,
+  negative or non-increasing ones, as the track functions already did for their own times.
+- `add_animation_channel` rejects an output accessor whose component type the path cannot use
+  (integer translation/scale, non-normalized integer rotation/weights); the validator reports the
+  same as `ANIMATION_OUTPUT_TYPE`.
+- Documents that were valid may now report the new animation errors when read back.
+- Validator accessor readers refuse a `byteStride` below the element size (a zero stride with a huge `count` made them allocate without bound).
+
+### Breaking
+- None for the API. The stricter low-level `add_animation_sampler`/`add_animation_channel` and the
+  new validator errors can turn a previously accepted hand-made animation into an error.
+
 ## 0.19.0
 
 Skinning. The README Skinning row is Full (the Khronos corpus has not been run locally). Output

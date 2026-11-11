@@ -10,7 +10,7 @@ A Rust library for creating, manipulating, and exporting 3D meshes with support 
 - Scene hierarchy and node transformation support
 - Export to spec-conformant binary GLB (chunk alignment and padding handled); the document is validated first
 - Perspective and orthographic cameras (see [docs/CAMERAS.md](docs/CAMERAS.md))
-- Skinning and keyframe animation (see [docs/SKINNING.md](docs/SKINNING.md))
+- Skinning (see [docs/SKINNING.md](docs/SKINNING.md)) and keyframe animation (see [docs/ANIMATION.md](docs/ANIMATION.md))
 - Morph targets (blend shapes) with weights animation (see [docs/MORPH_TARGETS.md](docs/MORPH_TARGETS.md))
 - Vertex attributes: positions, normals, multiple UV sets, and skinning joints/weights
 - Lightweight math types via mint instead of nalgebra
@@ -208,7 +208,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Images | ✅ Full | Core formats PNG/JPEG: embedded in a buffer view (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks), `data:` URIs supported (`add_image_data_uri`) and external relative `uri` (`add_image_uri`); validated (`IMAGE_*`); see docs/BUFFERS.md. WebP/KTX2/basisu are extensions and out of scope |
 | | Texture Coordinates | ✅ Full | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per material slot, including the specular-glossiness textures; missing sets are validated (`MATERIAL_TEXCOORD_MISSING`). No `KHR_texture_transform` |
 | **Animation** |||||
-| | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
+| | Animation | ✅ Full | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation; rotation and weights as `FLOAT` or normalized `i8`/`u8`/`i16`/`u16` (`add_rotation_track_normalized`, `add_weights_track_normalized`, cubic variants; translation and scale stay `FLOAT`); sampler reuse (`add_channel_with_sampler`); validated on the stored data (`ANIMATION_*`); see docs/ANIMATION.md. `KHR_animation_pointer` and extension channel paths are not implemented |
 | | Skinning | ✅ Full | Skins (joints, skeleton, optional inverse bind matrices, computed or supplied), `add_skinned_node`/`set_node_skin`, any number of `JOINTS_n`/`WEIGHTS_n` sets with `u8`/`u16` joints and `f32` or normalized `u8`/`u16` weights (`SkinWeights`, exact-sum `quantize_u8`/`quantize_u16`); validated (`SKIN_*`, `NODE_SKIN_*`, `SKINNED_*`); see docs/SKINNING.md |
 | **Cameras** |||||
 | | Cameras | ✅ Full | Perspective (`add_perspective_camera`: optional `zfar` for an infinite far plane, optional `aspectRatio`) and orthographic (`add_orthographic_camera`) cameras, node references, camera/projection `extras`/`extensions`; ranges validated (`CAMERA_*`); see docs/CAMERAS.md |

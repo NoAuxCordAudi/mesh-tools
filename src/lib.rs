@@ -115,7 +115,7 @@ pub use constants::sampler_filter;
 pub use constants::sampler_wrap;
 pub use constants::alpha_mode;
 pub use constants::primitive_mode;
-pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
+pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType, NormalizedComponent};
 pub use builder_skin::{limit_influences, normalize_weights, quantize_u16, quantize_u8, JointIndices, SkinSet, SkinWeights};
 pub use builder_morph::{MorphDelta, MorphTarget};
 pub use material::{AlphaMode, SpecularGlossiness, TextureRef};
@@ -127,6 +127,11 @@ pub use primitive_spec::{fan_to_triangles, strip_to_triangles, ColorData, Indice
 #[cfg(doctest)]
 #[doc = include_str!("../docs/SKINNING.md")]
 struct SkinningGuideDoctests;
+
+// Likewise for docs/ANIMATION.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/ANIMATION.md")]
+struct AnimationGuideDoctests;
 
 // Likewise for docs/MORPH_TARGETS.md.
 #[cfg(doctest)]
