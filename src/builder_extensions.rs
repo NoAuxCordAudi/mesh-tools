@@ -9,7 +9,8 @@ use crate::models::{Extensions, PbrSpecularGlossiness};
 /// The glTF object an extension payload or `extras` value is attached to.
 ///
 /// Indices are checked when the target is used; an out-of-range index is an error.
-/// Texture-info structs (`baseColorTexture` etc.) are not addressable yet.
+/// Objects that must exist for a target (a camera's `perspective`, a material texture slot, an
+/// accessor's `sparse`) are errors when absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExtensionTarget {
@@ -39,6 +40,35 @@ pub enum ExtensionTarget {
     CameraPerspective(usize),
     /// `cameras[i].orthographic`; the camera must have one.
     CameraOrthographic(usize),
+    /// `animations[i].channels[j].target`.
+    AnimationChannelTarget { animation: usize, channel: usize },
+    /// The texture-info object in one slot of a material; the slot must be set.
+    MaterialTexture { material: usize, slot: TextureSlot },
+    /// `accessors[i].sparse`; the accessor must have one.
+    Sparse(usize),
+    /// `accessors[i].sparse.indices`.
+    SparseIndices(usize),
+    /// `accessors[i].sparse.values`.
+    SparseValues(usize),
+}
+
+/// A texture reference slot of a material (see [`ExtensionTarget::MaterialTexture`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureSlot {
+    /// `pbrMetallicRoughness.baseColorTexture`.
+    BaseColor,
+    /// `pbrMetallicRoughness.metallicRoughnessTexture`.
+    MetallicRoughness,
+    /// `normalTexture`.
+    Normal,
+    /// `occlusionTexture`.
+    Occlusion,
+    /// `emissiveTexture`.
+    Emissive,
+    /// `KHR_materials_pbrSpecularGlossiness.diffuseTexture`.
+    Diffuse,
+    /// `KHR_materials_pbrSpecularGlossiness.specularGlossinessTexture`.
+    SpecularGlossiness,
 }
 
 fn invalid(msg: String) -> GltfError {
@@ -114,6 +144,39 @@ impl GltfBuilder {
             }
             T::AnimationChannel { animation, channel } => {
                 plain!(item!(item!(g.animations, animation, "animation").channels, channel, "channel"))
+            }
+            T::AnimationChannelTarget { animation, channel } => {
+                let c = item!(item!(g.animations, animation, "animation").channels, channel, "channel");
+                plain!(&mut c.target)
+            }
+            T::MaterialTexture { material, slot } => {
+                use TextureSlot as S;
+                let m = item!(g.materials, material, "material");
+                let missing = || invalid(format!("material {material} has no {slot:?} texture"));
+                match slot {
+                    S::BaseColor | S::MetallicRoughness => {
+                        let pbr = m.pbr_metallic_roughness.as_mut().ok_or_else(missing)?;
+                        let t = if slot == S::BaseColor { &mut pbr.base_color_texture } else { &mut pbr.metallic_roughness_texture };
+                        plain!(t.as_mut().ok_or_else(missing)?)
+                    }
+                    S::Normal => plain!(m.normal_texture.as_mut().ok_or_else(missing)?),
+                    S::Occlusion => plain!(m.occlusion_texture.as_mut().ok_or_else(missing)?),
+                    S::Emissive => plain!(m.emissive_texture.as_mut().ok_or_else(missing)?),
+                    S::Diffuse | S::SpecularGlossiness => {
+                        let sg = m.extensions.as_mut().and_then(|e| e.pbr_specular_glossiness.as_mut()).ok_or_else(missing)?;
+                        let t = if slot == S::Diffuse { &mut sg.diffuse_texture } else { &mut sg.specular_glossiness_texture };
+                        plain!(t.as_mut().ok_or_else(missing)?)
+                    }
+                }
+            }
+            T::Sparse(i) | T::SparseIndices(i) | T::SparseValues(i) => {
+                let a = item!(g.accessors, i, "accessor");
+                let sp = a.sparse.as_mut().ok_or_else(|| invalid(format!("accessor {i} has no sparse")))?;
+                match target {
+                    T::Sparse(_) => plain!(sp),
+                    T::SparseIndices(_) => plain!(&mut sp.indices),
+                    _ => plain!(&mut sp.values),
+                }
             }
             T::AnimationSampler { animation, sampler } => {
                 plain!(item!(item!(g.animations, animation, "animation").samplers, sampler, "animation sampler"))

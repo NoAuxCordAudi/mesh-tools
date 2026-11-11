@@ -33,9 +33,13 @@ assert!(b.set_extension(ExtensionTarget::Node(node), "VENDOR_label", json!("not 
 Targets: `Root`, `Asset`, `Scene`, `Node`, `Mesh`, `Primitive { mesh, primitive }`, `Material`,
 `PbrMetallicRoughness`, `Texture`, `Image`, `Sampler`, `Accessor`, `BufferView`, `Buffer`,
 `Skin`, `Animation`, `AnimationChannel { animation, channel }` and
-`AnimationSampler { animation, sampler }`. Not yet addressable: texture-info structs
-(`baseColorTexture` ...), the animation channel `target`, and objects the crate does not model
-(cameras, sparse accessors).
+`AnimationSampler { animation, sampler }`, `AnimationChannelTarget { animation, channel }`,
+`Camera`, `CameraPerspective`, `CameraOrthographic`, `Sparse`, `SparseIndices`, `SparseValues`
+(the accessor index; the accessor must have `sparse`) and `MaterialTexture { material, slot }`.
+`TextureSlot` is `BaseColor`, `MetallicRoughness`, `Normal`, `Occlusion`, `Emissive`, and, for
+`KHR_materials_pbrSpecularGlossiness`, `Diffuse` and `SpecularGlossiness`. A target whose object
+does not exist (a slot with no texture, an accessor without `sparse`) is an error and changes
+nothing.
 
 On a material, `KHR_materials_pbrSpecularGlossiness` (deprecated upstream) is stored in the
 typed struct, so its payload must match that schema; every other name is kept verbatim.

@@ -119,7 +119,7 @@ pub use builder_animation::{AnimationPath, CubicKeyframe, InterpolationType};
 pub use builder_skin::{limit_influences, normalize_weights, JointIndices, SkinSet};
 pub use builder_morph::{MorphDelta, MorphTarget};
 pub use material::{AlphaMode, SpecularGlossiness, TextureRef};
-pub use builder_extensions::ExtensionTarget;
+pub use builder_extensions::{ExtensionTarget, TextureSlot};
 pub use primitive_spec::{fan_to_triangles, strip_to_triangles, ColorData, Indices, PrimitiveMode, PrimitiveSpec, TexCoords};
 
 // Compile and run every Rust code block in docs/SKINNING.md as a doctest, so the guide

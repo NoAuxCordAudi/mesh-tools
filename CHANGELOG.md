@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.18.0
+
+Every glTF object that can carry `extensions`/`extras` is now reachable. The README Custom
+Extensions row is Full (opaque pass-through). Output of existing documents is unchanged.
+
+### Added
+- `ExtensionTarget::{AnimationChannelTarget { animation, channel }, MaterialTexture { material, slot }, Sparse, SparseIndices, SparseValues}`
+  and `TextureSlot` (seven slots, including the two specular-glossiness textures).
+- `extensions` corpus document `extensions_everywhere`; tests for every nested target, missing
+  objects and atomic failure.
+
+### Fixed
+- README, docs/EXTENSIONS.md and the Materials row no longer claim that sparse objects and texture
+  infos are unreachable.
+
+### Breaking
+- None (`ExtensionTarget` is `#[non_exhaustive]`).
+
 ## 0.17.0
 
 Cameras. The README Cameras and Nodes rows are now Full. Output of documents that use no camera

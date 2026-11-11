@@ -381,6 +381,62 @@ fn cameras_extras_doc() -> GltfBuilder {
     b
 }
 
+/// Extensions and extras on every object kind, including texture infos, sparse objects and the
+/// animation channel target.
+fn extensions_everywhere_doc() -> GltfBuilder {
+    use mesh_tools::{material::MaterialBuilder, AccessorSpec, AccessorType, ExtensionTarget as T, InterpolationType, SparseSpec, SpecularGlossiness, TextureRef, TextureSlot as S};
+    use serde_json::json;
+    let mut b = GltfBuilder::new();
+    let tex = b.create_checkerboard_texture(4, 4, 2, [0; 3], [255; 3]).unwrap();
+    let sg = SpecularGlossiness {
+        diffuse_texture: Some(TextureRef::new(tex)),
+        specular_glossiness_texture: Some(TextureRef::new(tex)),
+        ..Default::default()
+    };
+    let m = MaterialBuilder::new(None)
+        .with_base_color_texture(tex)
+        .with_metallic_roughness_texture(tex)
+        .with_normal_texture(tex, 1.0)
+        .with_occlusion_texture(tex, 1.0)
+        .with_emissive_texture(tex)
+        .with_specular_glossiness(sg)
+        .try_build()
+        .unwrap();
+    let mat = b.add_material_from(m).unwrap();
+    let mesh = b.create_box_with_material(1.0, Some(mat));
+    let node = b.add_node(None, Some(mesh), None, None, None);
+    b.add_scene(None, Some(vec![node]));
+    let joint = b.add_joint_node(None, None, None, None);
+    b.add_skin(None, vec![joint], None, Some(joint)).unwrap();
+    let cam = b.add_perspective_camera(None, 0.5, 0.1, Some(10.0), None).unwrap();
+    b.set_node_camera(joint, cam).unwrap();
+    let ortho = b.add_orthographic_camera(None, 2.0, 1.0, 0.1, 10.0).unwrap();
+    let ortho_node = b.add_node(None, None, None, None, None);
+    b.set_node_camera(ortho_node, ortho).unwrap();
+    let anim = b.add_animation(None);
+    b.add_translation_track(anim, node, &[0.0, 1.0], &[[0.0; 3], [1.0; 3]], InterpolationType::Linear).unwrap();
+    let sp = SparseSpec::new(vec![1, 3], vec![5.0f32, 6.0]);
+    let acc = b.add_sparse_accessor::<f32>(5, AccessorType::Scalar, None, sp, AccessorSpec::new()).unwrap();
+    let mut targets = vec![
+        T::Root, T::Asset, T::Scene(0), T::Node(node), T::Mesh(mesh), T::Primitive { mesh, primitive: 0 },
+        T::Material(mat), T::PbrMetallicRoughness(mat), T::Texture(tex), T::Image(0), T::Sampler(0),
+        T::Accessor(0), T::BufferView(0), T::Buffer(0), T::Skin(0), T::Camera(cam), T::CameraPerspective(cam),
+        T::Camera(ortho), T::CameraOrthographic(ortho),
+        T::Animation(0), T::AnimationChannel { animation: 0, channel: 0 },
+        T::AnimationChannelTarget { animation: 0, channel: 0 }, T::AnimationSampler { animation: 0, sampler: 0 },
+        T::Sparse(acc), T::SparseIndices(acc), T::SparseValues(acc),
+    ];
+    targets.extend(
+        [S::BaseColor, S::MetallicRoughness, S::Normal, S::Occlusion, S::Emissive, S::Diffuse, S::SpecularGlossiness]
+            .map(|slot| T::MaterialTexture { material: mat, slot }),
+    );
+    for t in targets {
+        b.set_extension(t, "VENDOR_corpus", json!({ "a": 1 })).unwrap();
+        b.set_extras(t, json!({ "k": 1 })).unwrap();
+    }
+    b
+}
+
 fn corpus() -> Vec<(&'static str, GltfBuilder)> {
     let mut simple = GltfBuilder::new();
     let m = simple.create_box(1.0);
@@ -406,6 +462,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("cameras_perspective", cameras_perspective_doc()),
         ("cameras_orthographic", cameras_orthographic_doc()),
         ("cameras_extras", cameras_extras_doc()),
+        ("extensions_everywhere", extensions_everywhere_doc()),
     ]
 }
 

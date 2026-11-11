@@ -1,6 +1,6 @@
 mod common;
 
-use mesh_tools::{ExtensionTarget as T, GltfBuilder, GltfError};
+use mesh_tools::{ExtensionTarget as T, GltfBuilder, GltfError, TextureSlot as S};
 use serde_json::{json, Value};
 
 const EXT: &str = "VENDOR_test";
@@ -27,6 +27,107 @@ fn rich() -> GltfBuilder {
     let anim = b.add_animation(None);
     b.add_translation_track(anim, node, &[0.0, 1.0], &[[0.0; 3], [1.0; 3]], mesh_tools::InterpolationType::Linear).unwrap();
     b
+}
+
+/// `rich()` plus material 1 with all seven texture slots and accessor 5+ with sparse data.
+/// Returns the builder and the sparse accessor index.
+fn richer() -> (GltfBuilder, usize) {
+    use mesh_tools::{material::MaterialBuilder, AccessorSpec, AccessorType, SparseSpec, SpecularGlossiness, TextureRef};
+    let mut b = rich();
+    let sg = SpecularGlossiness {
+        diffuse_texture: Some(TextureRef::new(0)),
+        specular_glossiness_texture: Some(TextureRef::new(0)),
+        ..Default::default()
+    };
+    let m = MaterialBuilder::new(None)
+        .with_base_color_texture(0)
+        .with_metallic_roughness_texture(0)
+        .with_normal_texture(0, 1.0)
+        .with_occlusion_texture(0, 1.0)
+        .with_emissive_texture(0)
+        .with_specular_glossiness(sg)
+        .try_build()
+        .unwrap();
+    assert_eq!(b.add_material_from(m).unwrap(), 1);
+    let sp = SparseSpec::new(vec![1, 3], vec![5.0f32, 6.0]);
+    let acc = b.add_sparse_accessor::<f32>(5, AccessorType::Scalar, None, sp, AccessorSpec::new()).unwrap();
+    (b, acc)
+}
+
+const ALL_SLOTS: [S; 7] = [S::BaseColor, S::MetallicRoughness, S::Normal, S::Occlusion, S::Emissive, S::Diffuse, S::SpecularGlossiness];
+
+/// Extensions and extras on the nested targets (texture infos, channel target, sparse objects)
+/// appear in the exported JSON at the right paths and the file still loads.
+#[test]
+fn nested_targets_round_trip() {
+    let (mut b, acc) = richer();
+    let mut targets = vec![
+        T::AnimationChannelTarget { animation: 0, channel: 0 },
+        T::Sparse(acc),
+        T::SparseIndices(acc),
+        T::SparseValues(acc),
+    ];
+    targets.extend(ALL_SLOTS.map(|slot| T::MaterialTexture { material: 1, slot }));
+    for (i, t) in targets.iter().enumerate() {
+        b.set_extension(*t, EXT, payload()).unwrap_or_else(|e| panic!("{t:?}: {e}"));
+        b.set_extras(*t, json!({ "t": i })).unwrap_or_else(|e| panic!("{t:?}: {e}"));
+    }
+    assert!(b.validate().is_valid(), "{:?}", b.validate());
+    common::parse_glb(&b);
+    let raw = json_chunk(&b);
+    let m = &raw["materials"][1];
+    let paths = [
+        &raw["animations"][0]["channels"][0]["target"],
+        &raw["accessors"][acc]["sparse"],
+        &raw["accessors"][acc]["sparse"]["indices"],
+        &raw["accessors"][acc]["sparse"]["values"],
+        &m["pbrMetallicRoughness"]["baseColorTexture"],
+        &m["pbrMetallicRoughness"]["metallicRoughnessTexture"],
+        &m["normalTexture"],
+        &m["occlusionTexture"],
+        &m["emissiveTexture"],
+        &m["extensions"]["KHR_materials_pbrSpecularGlossiness"]["diffuseTexture"],
+        &m["extensions"]["KHR_materials_pbrSpecularGlossiness"]["specularGlossinessTexture"],
+    ];
+    assert_eq!(paths.len(), targets.len());
+    for (i, o) in paths.iter().enumerate() {
+        assert_eq!(o["extensions"][EXT], payload(), "target {i}");
+        assert_eq!(o["extras"], json!({ "t": i }), "target {i}");
+    }
+    // Extras and extensions leave the texture-info index untouched.
+    assert_eq!(m["normalTexture"]["index"], 0);
+}
+
+#[test]
+fn nested_target_failures_are_atomic() {
+    let (mut b, acc) = richer();
+    let mut bad = vec![
+        T::AnimationChannelTarget { animation: 0, channel: 1 },
+        T::AnimationChannelTarget { animation: 3, channel: 0 },
+        T::Sparse(acc + 1),
+        T::Sparse(0), // accessor 0 is dense
+        T::SparseIndices(0),
+        T::SparseValues(99),
+        T::MaterialTexture { material: 9, slot: S::Normal },
+    ];
+    // Material 0 (basic) has no texture in any slot.
+    bad.extend(ALL_SLOTS.map(|slot| T::MaterialTexture { material: 0, slot }));
+    let before = json_chunk(&b);
+    for t in bad {
+        assert!(is_invalid_input(b.set_extension(t, EXT, payload())), "{t:?}");
+        assert!(is_invalid_input(b.set_extras(t, json!(1))), "{t:?}");
+    }
+    assert_eq!(json_chunk(&b), before);
+    // A slot that is unset on a material that has others.
+    let mat = &mut b.gltf.materials.as_mut().unwrap()[1];
+    mat.emissive_texture = None;
+    mat.extensions.as_mut().unwrap().pbr_specular_glossiness.as_mut().unwrap().diffuse_texture = None;
+    let before = json_chunk(&b);
+    for slot in [S::Emissive, S::Diffuse] {
+        assert!(is_invalid_input(b.set_extension(T::MaterialTexture { material: 1, slot }, EXT, payload())), "{slot:?}");
+    }
+    assert_eq!(json_chunk(&b), before, "failed calls must not change the document");
+    assert!(!before["extensionsUsed"].as_array().unwrap().iter().any(|e| e == EXT));
 }
 
 /// Raw JSON of an exported GLB (for objects the gltf crate cannot expose, like asset.extensions).

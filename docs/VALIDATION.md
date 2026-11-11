@@ -97,6 +97,7 @@ magnitudes, a large `yfov`, an unused camera) at a different severity, which the
 Extension and asset codes (`ASSET_*`, `EXTENSION_*`, `EXTENSIONS_*`) are listed in
 [EXTENSIONS.md](EXTENSIONS.md); the Khronos validator reports the same problems as
 `UNDECLARED_EXTENSION`, `EMPTY_ENTRY`, `UNUSED_EXTENSION_REQUIRED` and `UNSUPPORTED_EXTENSION`.
+The `extensions_everywhere` corpus document carries extensions and extras on every addressable object (texture infos, sparse objects, channel targets); the in-crate `EXTENSION_NOT_DECLARED` search covers them all.
 These mappings are unverified against a local run of the pinned validator.
 
 The Khronos codes come from the validator's `lib/src/errors.dart` at the pinned version. Later
