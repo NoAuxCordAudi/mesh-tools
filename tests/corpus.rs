@@ -108,6 +108,22 @@ fn textured_doc() -> GltfBuilder {
     scene_of(b, mesh)
 }
 
+/// A textured quad whose image is a base64 data URI (adds nothing to the BIN chunk).
+fn image_data_uri_doc() -> GltfBuilder {
+    use mesh_tools::{material::MaterialBuilder, texture::{create_uv_test_pattern, image_to_bytes, TextureFormat}};
+    let mut b = GltfBuilder::new();
+    let png = image_to_bytes(&create_uv_test_pattern(16, 16).unwrap(), TextureFormat::PNG).unwrap();
+    let img = b.add_image_data_uri(Some("uv".into()), TextureFormat::PNG, &png).unwrap();
+    let tex = b.add_texture(None, img, None).unwrap();
+    let mat = b.add_material_from(MaterialBuilder::new(Some("DataUri".into())).with_base_color_texture(tex).try_build().unwrap()).unwrap();
+    let mesh = quad_mesh("DataUriQuad")
+        .with_texcoords(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+        .with_material(mat)
+        .build_into(&mut b)
+        .unwrap();
+    scene_of(b, mesh)
+}
+
 /// Specular-glossiness with a metallic-roughness fallback and a texture on TEXCOORD_1.
 fn specular_glossiness_doc() -> GltfBuilder {
     use mesh_tools::{material::MaterialBuilder, PrimitiveSpec, SpecularGlossiness, TexCoords, TextureRef};
@@ -311,6 +327,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("custom_mesh", custom_mesh_doc()),
         ("materials", materials_doc()),
         ("textured", textured_doc()),
+        ("image_data_uri", image_data_uri_doc()),
         ("specular_glossiness", specular_glossiness_doc()),
         ("pbr_slots", pbr_slots_doc()),
         ("hierarchy", hierarchy_doc()),

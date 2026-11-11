@@ -190,7 +190,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Asset Information | ✅ Full | `version` 2.0, `generator` (settable or omitted), `copyright`, `minVersion`, and asset `extensions`/`extras`, with validation; see docs/EXTENSIONS.md |
 | | Scenes | ⚠️ Partial | Multiple scenes; the first scene added becomes the default (no API to change it) |
 | | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; morph target `weights` overrides; the builder never sets `matrix`; no camera |
-| | Buffers | ⚠️ Partial | One embedded buffer (created on first data write) exported as the GLB BIN chunk; no external `.bin` or data-URI export |
+| | Buffers | ⚠️ Partial | Single buffer (created on first data write), exported as the GLB BIN chunk (`export_glb`), a base64 data URI (`export_gltf_embedded`, `to_gltf_string_embedded`) or an external `.bin` (`export_gltf`, atomic), or as parts (`to_gltf_parts`); `BUFFER_URI_*` validation; see docs/BUFFERS.md. No multiple buffers; extras/extensions: see the Custom Extensions row |
 | | Buffer Views | ⚠️ Partial | `target` and `byteStride`: `add_data_view` for raw views, `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); validated. Single buffer only (`buffer` is always 0) |
 | | Accessors | ✅ Full | Typed writer for every component type (`i8`..`f32`) and accessor type (SCALAR..MAT4, padded columns), `normalized`, computed or explicit `min`/`max` (exact for integers), `byteOffset` into shared views, zero accessors (no `bufferView`) and sparse accessors (`u8`/`u16`/`u32` indices, optional zero base); validated; see docs/ACCESSORS.md. extras/extensions: see the Custom Extensions row |
 | **Geometry** |||||
@@ -204,7 +204,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Material workflows | ✅ Full | Metallic-roughness (core) and specular-glossiness (deprecated extension), with per-slot `texCoord`, scale and strength; see docs/MATERIALS.md. No other material extensions (`KHR_materials_variants`, clearcoat, sheen, transmission, unlit, ...) |
 | **Textures** |||||
 | | Samplers | ✅ Full | Typed `MagFilter`/`MinFilter`/`WrapMode` and `SamplerDesc` (all 108 combinations tested); `add_sampler`, `get_or_add_sampler` (dedup), one shared default sampler; `SAMPLER_*` and `TEXTURE_*` validation |
-| | Images | ⚠️ Partial | Embedded PNG/JPEG (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks) and external `uri` (`add_image_uri`); `data:` URIs are not supported yet, and WebP/KTX2 are out of scope |
+| | Images | ✅ Full | Core formats PNG/JPEG: embedded in a buffer view (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks), `data:` URIs supported (`add_image_data_uri`) and external relative `uri` (`add_image_uri`); validated (`IMAGE_*`); see docs/BUFFERS.md. WebP/KTX2/basisu are extensions and out of scope |
 | | Texture Coordinates | ✅ Full | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per material slot, including the specular-glossiness textures; missing sets are validated (`MATERIAL_TEXCOORD_MISSING`). No `KHR_texture_transform` |
 | **Animation** |||||
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |

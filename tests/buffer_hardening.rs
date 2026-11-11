@@ -124,9 +124,10 @@ fn buffer_length_mismatch_covers_every_buffer_index() {
     let mut b = GltfBuilder::new();
     b.create_box(1.0);
     b.gltf.buffers.as_mut().unwrap().push({ let mut x = Buffer::default(); x.byte_length = 16; x });
-    assert_error(&b, "BUFFER_LENGTH_MISMATCH");
+    assert_error(&b, "BUFFER_URI_MISSING");
     // an external (uri) buffer cannot be checked and is accepted
     b.gltf.buffers.as_mut().unwrap()[1].uri = Some("x.bin".into());
+    assert_no_error(&b, "BUFFER_URI_MISSING");
     assert_no_error(&b, "BUFFER_LENGTH_MISMATCH");
 }
 

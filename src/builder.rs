@@ -395,15 +395,36 @@ impl GltfBuilder {
     /// [`validate`](Self::validate)), or if the GLB would exceed the 4 GiB container limit.
     /// Use [`to_glb_bytes_unchecked`](Self::to_glb_bytes_unchecked) to skip validation.
     pub fn to_glb_bytes(&self) -> Result<Vec<u8>> {
-        let report = self.validate();
-        if !report.errors.is_empty() {
-            return Err(GltfError::InvalidData(format!(
-                "document failed validation with {} error(s):\n  - {}",
-                report.errors.len(),
-                report.errors.join("\n  - ")
-            )));
-        }
+        self.ensure_valid()?;
         self.to_glb_bytes_unchecked()
+    }
+
+    /// `GltfError::InvalidData` listing every validation error, if there are any.
+    pub(crate) fn ensure_valid(&self) -> Result<()> {
+        let report = self.validate();
+        if report.errors.is_empty() {
+            return Ok(());
+        }
+        Err(GltfError::InvalidData(format!(
+            "document failed validation with {} error(s):\n  - {}",
+            report.errors.len(),
+            report.errors.join("\n  - ")
+        )))
+    }
+
+    /// Serialize the document JSON, optionally setting `buffers[0].uri` in the output only.
+    pub(crate) fn serialize_json(&self, buffer_uri: Option<&str>) -> Result<String> {
+        let mut value = serde_json::to_value(&self.gltf)?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.retain(|k, v| {
+                k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
+            });
+        }
+        if let Some(buffer) = buffer_uri.and_then(|u| value.pointer_mut("/buffers/0").map(|b| (b, u))) {
+            buffer.0["uri"] = serde_json::Value::String(buffer.1.to_string());
+        }
+        crate::builder_accessor::write_integer_bounds_as_integers(&mut value);
+        Ok(serde_json::to_string(&value)?)
     }
 
     /// Serialize to GLB bytes **without** validating the document.
@@ -414,14 +435,7 @@ impl GltfBuilder {
     pub fn to_glb_bytes_unchecked(&self) -> Result<Vec<u8>> {
         let too_large = || GltfError::InvalidData("GLB exceeds the 4 GiB container limit".to_string());
 
-        let mut value = serde_json::to_value(&self.gltf)?;
-        if let Some(obj) = value.as_object_mut() {
-            obj.retain(|k, v| {
-                k == "extensionsUsed" || k == "extensionsRequired" || !matches!(v, serde_json::Value::Array(a) if a.is_empty())
-            });
-        }
-        crate::builder_accessor::write_integer_bounds_as_integers(&mut value);
-        let json = serde_json::to_string(&value)?;
+        let json = self.serialize_json(None)?;
         let json_pad = (4 - (json.len() % 4)) % 4;
         let json_chunk_len = u32::try_from(json.len() + json_pad).map_err(|_| too_large())?;
 

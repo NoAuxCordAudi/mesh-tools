@@ -87,6 +87,8 @@ mod builder_accessor;         // The single accessor writer
 mod builder_animation;        // Implementations for animation handling
 mod builder_skin;             // Implementations for skin handling
 mod builder_morph;            // Implementations for morph target handling
+mod uri;                      // Percent-encoding and data: URIs
+mod builder_export;           // Buffer encodings and .gltf export
 mod builder_extensions;       // Extensions, extras and asset metadata
 mod builder_mesh;             // Primitive and mesh creation
 mod primitive_spec;           // Primitive modes, specs and helpers
@@ -96,6 +98,7 @@ pub mod validate;             // Document validation
 pub use error::{GltfError, Result};
 pub use models::*;
 pub use builder::GltfBuilder;
+pub use builder_export::{BufferEncoding, GltfParts};
 pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
 pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType, SparseSpec};
@@ -157,6 +160,11 @@ struct PrimitiveModesGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/MATERIALS.md")]
 struct MaterialsGuideDoctests;
+
+// Likewise for docs/BUFFERS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/BUFFERS.md")]
+struct BuffersGuideDoctests;
 
 // Likewise for docs/TEXTURES.md.
 #[cfg(doctest)]

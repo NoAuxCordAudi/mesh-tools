@@ -244,6 +244,13 @@ impl<'a> Doc<'a> {
             if im.uri.as_deref() == Some("") {
                 r.errors.push(format!("IMAGE_URI_EMPTY: image {i} has an empty uri"));
             }
+            if let Some(u) = im.uri.as_deref().filter(|u| crate::uri::is_data_uri(u)) {
+                self.check_image_data_uri(i, u, format, r);
+            } else if let Some(u) = im.uri.as_deref().filter(|u| !u.is_empty()) {
+                if let Err(e) = crate::uri::check_relative_uri(u) {
+                    r.errors.push(format!("IMAGE_URI_INVALID: image {i}: {e}"));
+                }
+            }
             let Some(vi) = im.buffer_view else { continue };
             let Some(v) = views.get(vi) else {
                 r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} references buffer view {vi} ({} present)", views.len()));
@@ -386,6 +393,27 @@ impl<'a> Doc<'a> {
         }
     }
 
+    fn check_image_data_uri(&self, i: usize, uri: &str, declared: Option<TextureFormat>, r: &mut ValidationReport) {
+        let (mime, data) = match crate::uri::decode_data_uri(uri) {
+            Ok(x) => x,
+            Err(e) => return r.errors.push(format!("IMAGE_DATA_URI_INVALID: image {i}: {e}")),
+        };
+        let Some(format) = TextureFormat::from_mime_type(&mime) else {
+            return r.errors.push(format!("IMAGE_DATA_URI_INVALID: image {i} media type {mime:?} is not image/png or image/jpeg"));
+        };
+        if declared.map_or(false, |d| d != format) {
+            return r.errors.push(format!("IMAGE_DATA_URI_INVALID: image {i} mimeType disagrees with its data URI media type {mime:?}"));
+        }
+        if TextureFormat::from_magic(&data) != Some(format) {
+            return r.errors.push(format!("IMAGE_DATA_MISMATCH: image {i} bytes do not start with a {} signature", format.mime_type()));
+        }
+        match format.header_dimensions(&data) {
+            Ok((w, h)) if w == 0 || h == 0 => r.errors.push(format!("IMAGE_DIMENSIONS_INVALID: image {i} has size {w}x{h}")),
+            Ok(_) => {}
+            Err(e) => r.errors.push(format!("IMAGE_DATA_UNDECODABLE: image {i}: {e}")),
+        }
+    }
+
     fn check_buffers(&self, r: &mut ValidationReport) {
         let data_len = self.b.buffer_data.len();
         let buffers = self.b.gltf.buffers.as_deref().unwrap_or(&[]);
@@ -399,11 +427,36 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!(
                     "BUFFER_LENGTH_MISMATCH: buffer 0 declares {} bytes but {} are stored", buf.byte_length, data_len
                 ));
-            } else if i > 0 && buf.uri.is_none() {
-                // Only buffer 0 can be the GLB BIN chunk; a uri-less buffer has no stored data.
-                r.errors.push(format!(
-                    "BUFFER_LENGTH_MISMATCH: buffer {i} declares {} bytes but has no uri and no stored data", buf.byte_length
-                ));
+            }
+            if i == 0 && buf.uri.is_some() {
+                r.errors.push("BUFFER_URI_ON_GLB_BUFFER: buffer 0 holds the builder's data and must not have a uri; \
+                    choose the encoding at export (BufferEncoding)".to_string());
+            } else if i > 0 {
+                // Only buffer 0 can be the GLB BIN chunk; other buffers need a uri.
+                match buf.uri.as_deref() {
+                    None => r.errors.push(format!("BUFFER_URI_MISSING: buffer {i} has no uri and no stored data")),
+                    Some(u) if crate::uri::is_data_uri(u) => match crate::uri::decode_data_uri(u) {
+                        Err(e) => r.errors.push(format!("BUFFER_DATA_URI_INVALID: buffer {i}: {e}")),
+                        Ok((mime, _)) if mime != "application/octet-stream" && mime != "application/gltf-buffer" => {
+                            r.errors.push(format!("BUFFER_DATA_URI_INVALID: buffer {i} media type {mime:?} is not application/octet-stream"));
+                        }
+                        Ok((_, d)) if d.len() < buf.byte_length => r.errors.push(format!(
+                            "BUFFER_DATA_URI_INVALID: buffer {i} declares {} bytes but its data URI holds {}", buf.byte_length, d.len()
+                        )),
+                        Ok(_) => {}
+                    },
+                    Some(u) => {
+                        if let Err(e) = crate::uri::check_relative_uri(u) {
+                            r.errors.push(format!("BUFFER_URI_INVALID: buffer {i}: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+        let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
+        for i in 0..buffers.len() {
+            if !views.iter().any(|v| v.buffer == i) {
+                r.warnings.push(format!("BUFFER_UNUSED: buffer {i} is not referenced by any buffer view"));
             }
         }
         for (i, v) in self.b.gltf.buffer_views.iter().flatten().enumerate() {

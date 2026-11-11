@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.0
+
+Buffer encodings. The README Images row is now Full (core PNG/JPEG, `data:` URIs supported). Buffers
+stays Partial: the builder still writes a single buffer (multiple buffers are not planned). Output
+of existing code is byte-identical.
+
+### Added
+- `BufferEncoding { Glb, DataUri, External { bin_file_name } }` and `GltfParts { json, bin }`.
+- `GltfBuilder::to_gltf_parts` (pure; validates; injects `buffers[0].uri` into the serialized copy
+  only, so the builder document never gains a `uri`), `to_gltf_string_embedded`, `export_gltf`
+  (`.gltf` plus `<stem>.bin`, tmp file and rename) and `export_gltf_embedded`.
+- `add_image_data_uri(name, format, bytes)`: embeds a PNG/JPEG as a base64 `data:` URI.
+- Validator errors `BUFFER_URI_ON_GLB_BUFFER`, `BUFFER_URI_MISSING`, `BUFFER_URI_INVALID`,
+  `BUFFER_DATA_URI_INVALID`, `IMAGE_DATA_URI_INVALID`; warning `BUFFER_UNUSED`.
+- docs/BUFFERS.md (doctested). The `base64` dependency (already declared) is now used.
+
+### Changed (breaking, pre-1.0)
+- A buffer other than buffer 0 without a `uri` now reports `BUFFER_URI_MISSING` instead of
+  `BUFFER_LENGTH_MISMATCH` (which stays for buffer 0 and for undersized data).
+- A `uri` set by hand on buffer 0 is now an error (`BUFFER_URI_ON_GLB_BUFFER`); the encoding is
+  chosen at export.
+- `add_image_uri` still rejects `data:` URIs (its error points to `add_image_data_uri`) and now also
+  rejects absolute, scheme-qualified, backslash and `..` URIs; the validator reports them as
+  `IMAGE_URI_INVALID` (new error code).
+
 ## 0.13.0
 
 Materials and texCoord, part 2 (specular-glossiness). The README rows PBR Materials, Texture

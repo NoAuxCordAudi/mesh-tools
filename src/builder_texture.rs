@@ -101,29 +101,44 @@ impl GltfBuilder {
     /// ```
     pub fn add_image_bytes(&mut self, name: Option<String>, format: texture::TextureFormat,
                            bytes: &[u8]) -> Result<usize> {
-        match texture::TextureFormat::from_magic(bytes) {
-            Some(f) if f == format => {}
-            found => {
-                return Err(GltfError::InvalidInput(format!(
-                    "image bytes do not start with a {} signature (detected {:?})",
-                    format.mime_type(), found
-                )))
-            }
-        }
-        let (w, h) = format.header_dimensions(bytes).map_err(|e| {
-            GltfError::InvalidInput(format!("unreadable {} header: {e}", format.mime_type()))
-        })?;
-        if w == 0 || h == 0 {
-            return Err(GltfError::InvalidInput(format!("image has zero size {w}x{h}")));
-        }
+        check_image_bytes(format, bytes)?;
         Ok(self.add_image_from_buffer(name, format.mime_type().to_string(), bytes))
+    }
+
+    /// Embed already-encoded image bytes as a base64 `data:` URI in the image's `uri`, so the image
+    /// travels inside the JSON and adds nothing to the binary buffer. Same checks as
+    /// [`add_image_bytes`](Self::add_image_bytes).
+    ///
+    /// # Errors
+    /// `GltfError::InvalidInput` if the bytes are not a PNG/JPEG of the declared format. The
+    /// document is unchanged on error.
+    ///
+    /// ```
+    /// use mesh_tools::{texture::{create_uv_test_pattern, image_to_bytes, TextureFormat}, GltfBuilder};
+    /// let mut b = GltfBuilder::new();
+    /// let png = image_to_bytes(&create_uv_test_pattern(8, 8).unwrap(), TextureFormat::PNG).unwrap();
+    /// let i = b.add_image_data_uri(None, TextureFormat::PNG, &png).unwrap();
+    /// assert!(b.inspect_gltf().images.as_ref().unwrap()[i].uri.as_ref().unwrap().starts_with("data:image/png;base64,"));
+    /// assert!(b.add_image_data_uri(None, TextureFormat::PNG, b"not a png").is_err());
+    /// ```
+    pub fn add_image_data_uri(&mut self, name: Option<String>, format: texture::TextureFormat,
+                              bytes: &[u8]) -> Result<usize> {
+        check_image_bytes(format, bytes)?;
+        let image = Image {
+            name,
+            uri: Some(crate::uri::encode_data_uri(format.mime_type(), bytes)),
+            mime_type: Some(format.mime_type().to_string()),
+            ..Default::default()
+        };
+        Ok(push(&mut self.gltf.images, image))
     }
 
     /// Reference an external image by relative URI. `format` sets the optional `mimeType`.
     /// The file is not read and its existence is not checked.
     ///
     /// # Errors
-    /// `GltfError::InvalidInput` for an empty URI or a `data:` URI (not supported yet).
+    /// `GltfError::InvalidInput` for an empty, absolute, scheme-qualified or `..` URI, or a `data:` URI (use
+    /// [`add_image_data_uri`](Self::add_image_data_uri)).
     ///
     /// ```
     /// use mesh_tools::GltfBuilder;
@@ -137,8 +152,9 @@ impl GltfBuilder {
             return Err(GltfError::InvalidInput("image uri is empty".into()));
         }
         if uri.get(..5).map_or(false, |p| p.eq_ignore_ascii_case("data:")) {
-            return Err(GltfError::InvalidInput("data: URIs are not supported for images yet".into()));
+            return Err(GltfError::InvalidInput("data: URIs are added with add_image_data_uri".into()));
         }
+        crate::uri::check_relative_uri(uri).map_err(|e| GltfError::InvalidInput(format!("image {e}")))?;
         let image = Image {
             name,
             uri: Some(uri.to_string()),
@@ -372,4 +388,24 @@ mod tests {
         }
         assert!(b.validate().has_error("IMAGE_DATA_UNDECODABLE"));
     }
+}
+
+/// Magic number, header and size checks shared by the byte-based image writers.
+fn check_image_bytes(format: texture::TextureFormat, bytes: &[u8]) -> Result<()> {
+    match texture::TextureFormat::from_magic(bytes) {
+        Some(f) if f == format => {}
+        found => {
+            return Err(GltfError::InvalidInput(format!(
+                "image bytes do not start with a {} signature (detected {:?})",
+                format.mime_type(), found
+            )))
+        }
+    }
+    let (w, h) = format.header_dimensions(bytes).map_err(|e| {
+        GltfError::InvalidInput(format!("unreadable {} header: {e}", format.mime_type()))
+    })?;
+    if w == 0 || h == 0 {
+        return Err(GltfError::InvalidInput(format!("image has zero size {w}x{h}")));
+    }
+    Ok(())
 }
