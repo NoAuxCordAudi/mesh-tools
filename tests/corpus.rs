@@ -31,6 +31,10 @@ fn scene_of(mut b: GltfBuilder, mesh: usize) -> GltfBuilder {
 }
 
 /// A 2x2 quad on the XY plane (4 vertices, 2 triangles, u16 indices).
+/// +X tangents with handedness +1 for the four quad vertices (the quad faces +Z, so +X is a valid
+/// tangent). Documents with a normal texture carry tangents so viewers need not generate them.
+const QUAD_TANGENTS: [f32; 16] = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
+
 fn quad_mesh(name: &str) -> MeshBuilder {
     MeshBuilder::new(Some(name.into()))
         .with_positions(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0])
@@ -102,6 +106,7 @@ fn textured_doc() -> GltfBuilder {
     ).unwrap();
     let mesh = quad_mesh("TexQuad")
         .with_texcoords(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+        .with_tangents(QUAD_TANGENTS.to_vec())
         .with_material(mat)
         .build_into(&mut b)
         .unwrap();
@@ -179,6 +184,7 @@ fn pbr_slots_doc() -> GltfBuilder {
         .create_primitive(PrimitiveSpec {
             positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             normals: Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            tangents: Some([1.0, 0.0, 0.0, 1.0].repeat(3)),
             texcoords: vec![uv(), TexCoords::U8(vec![0, 0, 255, 0, 0, 255])],
             material: Some(m),
             ..Default::default()
@@ -481,7 +487,12 @@ fn extensions_everywhere_doc() -> GltfBuilder {
         .try_build()
         .unwrap();
     let mat = b.add_material_from(m).unwrap();
-    let mesh = b.create_box_with_material(1.0, Some(mat));
+    let mesh = quad_mesh("Quad")
+        .with_texcoords(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
+        .with_tangents(QUAD_TANGENTS.to_vec())
+        .with_material(mat)
+        .build_into(&mut b)
+        .unwrap();
     let node = b.add_node(None, Some(mesh), None, None, None);
     b.add_scene(None, Some(vec![node]));
     let joint = b.add_joint_node(None, None, None, None);
