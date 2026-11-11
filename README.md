@@ -114,7 +114,7 @@ The library exports GLB (binary glTF) and validates the document before writing 
 ## Validation
 
 Besides the built-in `validate()`, the test corpus is checked against the Khronos glTF-Validator
-in CI. The Khronos corpus has not been run locally (the validator cannot be executed in the development sandbox), so the Full rows do not claim "corpus clean"; the in-crate validator and the independent `gltf` crate read-back are what the tests enforce. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
+in CI. The corpus passes the pinned Khronos validator in CI (no errors; the few accepted warnings are allow-listed with reasons), alongside the in-crate validator and the independent `gltf` crate read-back that the tests enforce. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
 
 ## Math Types and Compatibility Layer
 

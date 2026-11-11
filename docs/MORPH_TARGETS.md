@@ -259,8 +259,8 @@ A non-finite weight would otherwise be written as `null`; it is an error instead
   still be morphed by taking its primitive out of `builder.gltf.meshes`, calling
   `attach_morph_targets`, and putting it back (`tests/morph_targets.rs` does this with a box).
 - `MORPH_ATTRIBUTE_BUDGET` is a heuristic (16 attributes in total) and the validator's codes are
-  this library's own names. The Khronos glTF Validator has not been run against this library's
-  output.
+  this library's own names. The test corpus (including a morph document) is checked against the
+  Khronos glTF Validator in CI; see [VALIDATION.md](VALIDATION.md).
 
 A complete runnable example that verifies its own output is in `examples/morph_demo.rs`:
 

@@ -231,6 +231,6 @@ A skinned node with a non-identity transform is reported as the warning
 - Inverse bind matrices assume each joint's world transform is affine (bottom row `0 0 0 1`),
   built from a node's `matrix` or its translation, rotation and scale. A non-affine `matrix`
   gives a meaningless result. Singular transforms (for example a zero scale) are an error.
-- Normalized `u8`/`u16` weights are not supported yet.
 - The validator checks structure and ranges. It is not a replacement for the Khronos glTF
-  Validator, which has not been run against this library's output.
+  Validator. The test corpus (including a skinned document) is checked against it in CI; see
+  [VALIDATION.md](VALIDATION.md).

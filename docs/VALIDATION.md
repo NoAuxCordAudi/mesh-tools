@@ -58,20 +58,18 @@ CODE | why this finding is accepted
 
 ### Status of the corpus run
 
-The Khronos corpus has **not been run locally**: the development sandbox blocks downloading and
-executing the release binary, so no real validator output exists yet. Instead the corpus was
-audited statically (a script independent of the crate parsed every `target/corpus/*.glb`)
-against the rules the validator is known to enforce: GLB chunk alignment, accessor alignment,
-`min`/`max` against the data, finite values, unit normals/tangents (w = +-1), weight sums,
-attribute count agreement, index range and primitive-restart values, mode count rules, degenerate
-triangles, `TEXCOORD_n` presence, skinned-mesh/skin pairing, inverse bind matrix shape,
-animation input monotonicity, unit rotations, undeclared extensions and PNG chunk CRCs.
+The Khronos validator (pinned 2.0.0-dev.3.10) runs on the corpus in the CI `khronos-validator`
+job. Its first run reported **no errors** and only warnings, which were resolved:
 
-Triage: no error or warning findings. Expected infos only (not blocking): a normal texture
-without `TANGENT` (`MESH_PRIMITIVE_GENERATED_TANGENT_SPACE`, info) in `pbr_slots` and `textured`,
-and a joint node with no children (`NODE_EMPTY`, info) in `skinned`. The first real run happens
-in the CI `khronos-validator` job; any finding there must be fixed or, for a warning, allow-listed
-with a reason. No README row depends on the Khronos run yet.
+- `MESH_PRIMITIVE_GENERATED_TANGENT_SPACE`: fixed by giving the corpus documents that use a
+  normal texture `TANGENT` attributes.
+- `DATA_URI_GLB` and `MULTIPLE_EXTENSIONS`: allow-listed with reasons in
+  `tests/khronos/allowlist.txt`, because those documents deliberately exercise data URIs inside a
+  GLB and several extensions on one material.
+
+All negative cross-checks below were rejected by Khronos with the expected codes. The job is the
+source of truth: it fails on any error and on any warning that is not allow-listed. It has not
+been run on a developer machine here (the development sandbox blocks executing the binary).
 
 Known gap: the CI download is pinned by version but not by checksum.
 
