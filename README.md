@@ -182,7 +182,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; morph target `weights` overrides; the builder never sets `matrix`; no camera |
 | | Buffers | ⚠️ Partial | One embedded buffer (created on first data write) exported as the GLB BIN chunk; no external `.bin` or data-URI export |
 | | Buffer Views | ⚠️ Partial | `target` and `byteStride`: `add_data_view` for raw views, `add_interleaved_attributes` for interleaved vertex data (4-byte aligned elements, stride up to 252); validated. Single buffer only (`buffer` is always 0) |
-| | Accessors | ⚠️ Partial | Builder emits FLOAT VEC2/3/4, u8/u16/u32 indices and joints, MAT4 inverse bind matrices, and animation data; no sparse or normalized accessors |
+| | Accessors | ✅ Full | Typed writer for every component type (`i8`..`f32`) and accessor type (SCALAR..MAT4, padded columns), `normalized`, computed or explicit `min`/`max` (exact for integers), `byteOffset` into shared views, zero accessors (no `bufferView`) and sparse accessors (`u8`/`u16`/`u32` indices, optional zero base); validated; see docs/ACCESSORS.md. extras/extensions: see the Custom Extensions row |
 | **Geometry** |||||
 | | Meshes | ⚠️ Partial | Multiple primitives per mesh; morph targets and default weights; no tangent or vertex-color helpers |
 | | Primitive Types | ⚠️ Partial | Built-in generators emit triangles only; `Primitive.mode` can be set by hand for other modes, with no helpers or validation |

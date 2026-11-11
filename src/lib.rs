@@ -95,7 +95,7 @@ pub use models::*;
 pub use builder::GltfBuilder;
 pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
-pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType};
+pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType, SparseSpec};
 pub use interleave::InterleavedAttribute;
 
 // Constants re-exports
@@ -131,3 +131,8 @@ struct ValidationGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/EXTENSIONS.md")]
 struct ExtensionsGuideDoctests;
+
+// Likewise for docs/ACCESSORS.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/ACCESSORS.md")]
+struct AccessorsGuideDoctests;

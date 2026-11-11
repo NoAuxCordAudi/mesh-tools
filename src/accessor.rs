@@ -184,6 +184,25 @@ impl AccessorSpec {
     }
 }
 
+/// The substitution of [`GltfBuilder::add_sparse_accessor`](crate::GltfBuilder::add_sparse_accessor).
+///
+/// `indices` are element positions, strictly increasing; `values` holds one tightly packed
+/// element (`ty.components()` values) per index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparseSpec<C> {
+    /// Positions of the substituted elements, strictly increasing.
+    pub indices: Vec<u32>,
+    /// The replacement values, `ty.components()` per index.
+    pub values: Vec<C>,
+}
+
+impl<C: Component> SparseSpec<C> {
+    /// Substitute `values` at `indices`.
+    pub fn new(indices: Vec<u32>, values: Vec<C>) -> Self {
+        Self { indices, values }
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
 }

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.1
+
+Sparse accessors (part 3 of the Accessors / Buffer Views work). The README Accessors row is now
+Full; Buffer Views stays Partial (single buffer only). Existing output is byte-identical.
+
+### Added
+- `GltfBuilder::add_sparse_accessor` and `SparseSpec`: a base array (or zeros, with no `bufferView`)
+  with strictly increasing indices replaced by values. The index width (`u8`/`u16`/`u32`) is
+  the smallest that fits. Bounds are those of the substituted array. Validated up front, so an
+  `Err` leaves the document unchanged; a huge `count` with a zero base allocates nothing.
+- Model types `Sparse`, `SparseIndices`, `SparseValues` and `Accessor.sparse`.
+- Validator errors `ACCESSOR_SPARSE_COUNT`, `ACCESSOR_SPARSE_INDICES_TYPE`,
+  `ACCESSOR_SPARSE_INDICES_ORDER`, `ACCESSOR_SPARSE_INDEX_RANGE`, `ACCESSOR_SPARSE_VIEW_INVALID`
+  and `ACCESSOR_SPARSE_RANGE`. `ACCESSOR_OFFSET_ALIGNMENT` also covers sparse offsets. The bounds
+  and NaN/infinity checks now run on the substituted data, also for zero-base accessors.
+- `docs/ACCESSORS.md` (doctested) and a `sparse` corpus document.
+
+### Changed (breaking, pre-1.0)
+- `Accessor` has a new public field `sparse` (the struct is `#[non_exhaustive]`, so only code that
+  spreads from `Default` keeps compiling unchanged).
+
 ## 0.9.0
 
 Typed accessor writer and interleaved views (parts 1 and 2 of the Accessors / Buffer Views work; no

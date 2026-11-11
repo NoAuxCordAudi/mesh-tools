@@ -13,7 +13,7 @@
 mod common;
 
 use mesh_tools::mesh::MeshBuilder;
-use mesh_tools::{CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, Triangle};
+use mesh_tools::{AccessorSpec, AccessorType, Bounds, SparseSpec, CubicKeyframe, GltfBuilder, InterpolationType, MorphTarget, Triangle};
 use mesh_tools::compat::{point3, vector2, vector3};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -206,6 +206,17 @@ fn morph_doc() -> GltfBuilder {
 }
 
 /// One document per README feature. Add new documents here as features land.
+/// A mesh plus sparse accessors: a base with substitutions and a zero base (no bufferView).
+fn sparse_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let m = b.create_box(1.0);
+    let base: Vec<f32> = (0..15).map(|v| v as f32).collect();
+    let spec = || AccessorSpec::new().with_bounds(Bounds::Compute);
+    b.add_sparse_accessor(5, AccessorType::Vec3, Some(&base[..]), SparseSpec::new(vec![1, 3], vec![9.0; 6]), spec()).unwrap();
+    b.add_sparse_accessor::<i16>(4, AccessorType::Vec2, None, SparseSpec::new(vec![2], vec![-5, 9]), spec()).unwrap();
+    scene_of(b, m)
+}
+
 fn corpus() -> Vec<(&'static str, GltfBuilder)> {
     let mut simple = GltfBuilder::new();
     let m = simple.create_box(1.0);
@@ -223,6 +234,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("skinned", skinned_doc()),
         ("morph", morph_doc()),
         ("extensions", extensions_doc()),
+        ("sparse", sparse_doc()),
     ]
 }
 

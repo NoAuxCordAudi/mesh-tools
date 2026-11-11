@@ -245,10 +245,70 @@ pub struct Accessor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<bool>,
 
+    /// Sparse substitution applied on top of the base data (`bufferView`, or zeros if absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse: Option<Sparse>,
+
     /// Extension payloads keyed by extension name (opaque JSON).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<Extensions>,
 
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// Sparse storage of an accessor (`accessor.sparse`): `count` elements of the base data are
+/// replaced by `values`, at the positions listed in `indices`.
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
+pub struct Sparse {
+    /// Number of substituted elements (1 ..= accessor count).
+    pub count: usize,
+    /// Positions of the substituted elements.
+    pub indices: SparseIndices,
+    /// The replacement elements.
+    pub values: SparseValues,
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// Index data of a [`Sparse`]: strictly increasing unsigned integers.
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
+pub struct SparseIndices {
+    /// View holding the indices (no `target`, no `byteStride`).
+    #[serde(rename = "bufferView")]
+    pub buffer_view: usize,
+    #[serde(rename = "byteOffset", skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<usize>,
+    /// 5121, 5123 or 5125.
+    #[serde(rename = "componentType")]
+    pub component_type: usize,
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
+    /// Application-specific data (any JSON value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<serde_json::Value>,
+}
+
+/// Value data of a [`Sparse`]: tightly packed elements of the accessor's type.
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[non_exhaustive]
+pub struct SparseValues {
+    /// View holding the values (no `target`, no `byteStride`).
+    #[serde(rename = "bufferView")]
+    pub buffer_view: usize,
+    #[serde(rename = "byteOffset", skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<usize>,
+    /// Extension payloads keyed by extension name (opaque JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Extensions>,
     /// Application-specific data (any JSON value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extras: Option<serde_json::Value>,

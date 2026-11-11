@@ -6,7 +6,7 @@
 use crate::accessor::*;
 use crate::builder::GltfBuilder;
 use crate::error::{GltfError, Result};
-use crate::models::Accessor;
+use crate::models::{Accessor, Sparse};
 
 fn invalid(msg: String) -> GltfError {
     GltfError::InvalidInput(msg)
@@ -136,6 +136,131 @@ impl GltfBuilder {
             check_explicit(min, max, comps, C::TYPE, actual.as_ref())?;
         }
         Ok(self.write_slice(data, ty, &spec))
+    }
+
+    /// Add a sparse accessor: `count` elements, `base` (or zeros) with some replaced.
+    ///
+    /// `base` is tightly packed (`count * ty.components()` values) and written as the accessor's
+    /// own view, with `spec.target`. With `None` the accessor has no `bufferView` and reads as
+    /// zeros except at the sparse positions. `sparse.indices` must be strictly increasing and
+    /// below `count`; the index width (`u8`, `u16` or `u32`) is the smallest that fits the last
+    /// one. Indices and values get their own views (no target, no stride). Bounds, if requested,
+    /// are those of the substituted array.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if `count` is 0, there are no entries or more than `count`, the
+    /// indices are not strictly increasing or reach `count`, a value or base length does not
+    /// match, a float is NaN or infinite, `spec.normalized` is set for `f32` / `u32`, or explicit
+    /// bounds differ from the substituted data. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::{AccessorSpec, AccessorType, Bounds, GltfBuilder, SparseSpec};
+    /// let mut b = GltfBuilder::new();
+    /// let base: Vec<f32> = (0..15).map(|v| v as f32).collect(); // 5 x VEC3
+    /// let sparse = SparseSpec::new(vec![1, 3], vec![-1.0, -2.0, -3.0, 9.0, 9.0, 9.0]);
+    /// let spec = AccessorSpec::new().with_bounds(Bounds::Compute);
+    /// let a = b.add_sparse_accessor(5, AccessorType::Vec3, Some(&base), sparse, spec).unwrap();
+    /// let acc = &b.gltf.accessors.as_ref().unwrap()[a];
+    /// assert_eq!(acc.min, Some(vec![-1.0, -2.0, -3.0])); // of the substituted array
+    /// // Indices must be strictly increasing.
+    /// let bad = SparseSpec::new(vec![3, 1], vec![0.0, 0.0]);
+    /// assert!(b.add_sparse_accessor::<f32>(5, AccessorType::Scalar, None, bad, AccessorSpec::new()).is_err());
+    /// ```
+    pub fn add_sparse_accessor<C: Component>(
+        &mut self,
+        count: usize,
+        ty: AccessorType,
+        base: Option<&[C]>,
+        sparse: SparseSpec<C>,
+        spec: AccessorSpec,
+    ) -> Result<usize> {
+        let comps = ty.components();
+        check_normalized(spec.normalized, C::TYPE)?;
+        if count == 0 {
+            return Err(invalid("accessor count must be at least 1".to_string()));
+        }
+        let n = sparse.indices.len();
+        if n == 0 || n > count {
+            return Err(invalid(format!("sparse entry count {n} must be in 1..={count}")));
+        }
+        if let Some(w) = sparse.indices.windows(2).position(|w| w[0] >= w[1]) {
+            return Err(invalid(format!(
+                "sparse indices must be strictly increasing, but index {} ({}) is not above {}", w + 1, sparse.indices[w + 1], sparse.indices[w]
+            )));
+        }
+        let last = sparse.indices[n - 1];
+        if last as usize >= count {
+            return Err(invalid(format!("sparse index {last} is out of range for {count} elements")));
+        }
+        if sparse.values.len() != n * comps {
+            return Err(invalid(format!("{} sparse values, expected {n} x {comps}", sparse.values.len())));
+        }
+        if let Some(b) = base {
+            if count.checked_mul(comps) != Some(b.len()) {
+                return Err(invalid(format!("base has {} values, expected {count} x {comps}", b.len())));
+            }
+        }
+        if C::TYPE == ComponentType::F32 {
+            let bad = base.into_iter().flatten().chain(&sparse.values).position(|v| !v.to_f64().is_finite());
+            if let Some(i) = bad {
+                return Err(invalid(format!("sparse accessor value {i} is not finite")));
+            }
+        }
+        // Bounds of the substituted array in the raw component domain, without materializing
+        // `count` elements (a zero base is one zero element if any position is not replaced).
+        let to_f64 = |e: &[C]| e.iter().map(|v| v.to_f64()).collect::<Vec<f64>>();
+        let replaced = |e: usize| sparse.indices.binary_search(&(e as u32)).is_ok();
+        let mut elements: Vec<Vec<f64>> = sparse.values.chunks_exact(comps).map(to_f64).collect();
+        match base {
+            Some(b) => elements.extend(b.chunks_exact(comps).enumerate().filter(|&(e, _)| !replaced(e)).map(|(_, c)| to_f64(c))),
+            None if n < count => elements.push(vec![0.0; comps]),
+            None => {}
+        }
+        let actual = bounds_of(elements.into_iter());
+        let bounds = match &spec.bounds {
+            Bounds::None => None,
+            Bounds::Compute => actual,
+            Bounds::Explicit { min, max } => {
+                check_explicit(min, max, comps, C::TYPE, actual.as_ref())?;
+                Some((min.clone(), max.clone()))
+            }
+        };
+        // Everything is valid; the writes below cannot fail.
+        let buffer_view = base.map(|b| {
+            let (offset, length) = self.add_buffer_data(&encode_elements(b, ty));
+            self.add_buffer_view(offset, length, spec.target.map(BufferViewTarget::code))
+        });
+        let (index_type, index_bytes): (ComponentType, Vec<u8>) = if last <= u8::MAX as u32 {
+            (ComponentType::U8, sparse.indices.iter().map(|&i| i as u8).collect())
+        } else if last <= u16::MAX as u32 {
+            (ComponentType::U16, sparse.indices.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect())
+        } else {
+            (ComponentType::U32, sparse.indices.iter().flat_map(|i| i.to_le_bytes()).collect())
+        };
+        let (offset, length) = self.add_buffer_data(&index_bytes);
+        let index_view = self.add_buffer_view(offset, length, None);
+        let (offset, length) = self.add_buffer_data(&encode_elements(&sparse.values, ty));
+        let value_view = self.add_buffer_view(offset, length, None);
+        let mut s = Sparse::default();
+        s.count = n;
+        s.indices.buffer_view = index_view;
+        s.indices.component_type = index_type.code();
+        s.values.buffer_view = value_view;
+        Ok(self.push_accessor(Accessor {
+            name: spec.name.clone(),
+            buffer_view,
+            component_type: C::TYPE.code(),
+            count,
+            type_: ty.as_str().to_string(),
+            min: bounds.as_ref().map(|b| b.0.clone()),
+            max: bounds.map(|b| b.1),
+            normalized: spec.normalized.then_some(true),
+            sparse: Some(s),
+            ..Default::default()
+        }))
     }
 
     /// Add an accessor with no `bufferView`: `count` elements that all read as zero.

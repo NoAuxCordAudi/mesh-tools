@@ -21,7 +21,7 @@
 
 use crate::builder::GltfBuilder;
 use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
-use crate::accessor::{component_size, decode_element, element_size, integer_range};
+use crate::accessor::{component_size, decode_element, element_size, integer_range, type_shape};
 use crate::constants::buffer_view_target;
 use crate::models::{Accessor, Mesh, Primitive};
 
@@ -312,10 +312,14 @@ impl<'a> Doc<'a> {
                 ));
             }
             let bounds_ok = self.check_bounds(i, a, r);
+            let sparse_ok = a.sparse.as_ref().map_or(true, |s| self.check_sparse(i, a, s, r));
             let Some(view_index) = a.buffer_view else {
                 // Without a view the accessor reads as zeros; a byteOffset then has nothing to offset.
                 if a.byte_offset.is_some() {
                     r.errors.push(format!("ACCESSOR_BUFFER_VIEW_MISSING: accessor {i} has a byteOffset but no bufferView"));
+                }
+                if a.sparse.is_some() && sparse_ok {
+                    self.check_data(i, bounds_ok, r);
                 }
                 continue;
             };
@@ -356,10 +360,132 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!(
                     "ACCESSOR_RANGE: accessor {i} needs {need} bytes but buffer view {view_index} has {}", view.byte_length
                 ));
-            } else {
+            } else if sparse_ok {
                 self.check_data(i, bounds_ok, r);
             }
         }
+    }
+
+    /// `len` bytes at `offset` inside buffer view `view`, if the view exists and holds them.
+    fn view_bytes(&self, view: usize, offset: usize, len: usize) -> Option<&[u8]> {
+        let v = self.b.gltf.buffer_views.as_ref()?.get(view)?;
+        let end = offset.checked_add(len)?;
+        if v.buffer != 0 || end > v.byte_length {
+            return None;
+        }
+        let start = v.byte_offset.checked_add(offset)?;
+        self.b.buffer_data.get(start..start.checked_add(len)?)
+    }
+
+    /// Check `accessor.sparse`; returns whether it is sound enough to read the substituted data.
+    fn check_sparse(&self, i: usize, a: &Accessor, s: &crate::models::Sparse, r: &mut ValidationReport) -> bool {
+        let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
+        let ok = std::cell::Cell::new(true);
+        let mut fail = |code: &str, msg: String| {
+            r.errors.push(format!("{code}: accessor {i} sparse {msg}"));
+            ok.set(false);
+        };
+        if s.count == 0 || s.count > a.count {
+            fail("ACCESSOR_SPARSE_COUNT", format!("count {} is not in 1..={}", s.count, a.count));
+        }
+        let index_size: Option<usize> = match s.indices.component_type {
+            5121 => Some(1),
+            5123 => Some(2),
+            5125 => Some(4),
+            t => {
+                fail("ACCESSOR_SPARSE_INDICES_TYPE", format!("indices component type {t} is not 5121, 5123 or 5125"));
+                None
+            }
+        };
+        let elem = element_size(a.component_type, &a.type_).unwrap_or(0);
+        // (name, view, byteOffset, bytes needed, alignment)
+        let parts = [
+            ("indices", s.indices.buffer_view, s.indices.byte_offset, index_size.and_then(|z| z.checked_mul(s.count)), index_size),
+            ("values", s.values.buffer_view, s.values.byte_offset, elem.checked_mul(s.count), component_size(a.component_type)),
+        ];
+        for (name, vi, off, need, align) in parts {
+            let Some(view) = views.get(vi) else {
+                fail("ACCESSOR_SPARSE_VIEW_INVALID", format!("{name} reference buffer view {vi}"));
+                continue;
+            };
+            if view.target.is_some() || view.byte_stride.is_some() {
+                fail("ACCESSOR_SPARSE_VIEW_INVALID", format!("{name} buffer view {vi} has a target or byteStride"));
+            }
+            let off = off.unwrap_or(0);
+            if let Some(al) = align.filter(|&al| off % al != 0 || view.byte_offset.checked_add(off).is_some_and(|abs| abs % al != 0)) {
+                fail("ACCESSOR_OFFSET_ALIGNMENT", format!("{name} byteOffset {off} is not aligned to {al} bytes"));
+            }
+            let fits = need.and_then(|n| off.checked_add(n)).is_some_and(|end| end <= view.byte_length);
+            if need.is_some() && !fits {
+                fail("ACCESSOR_SPARSE_RANGE", format!("{name} need {} bytes at offset {off} but buffer view {vi} has {}", need.unwrap(), view.byte_length));
+            }
+        }
+        if !ok.get() {
+            return false;
+        }
+        let Some(indices) = self.sparse_indices(s) else {
+            fail("ACCESSOR_SPARSE_RANGE", "indices extend past the buffer data".to_string());
+            return false;
+        };
+        if let Some(k) = (1..indices.len()).find(|&k| indices[k - 1] >= indices[k]) {
+            fail("ACCESSOR_SPARSE_INDICES_ORDER", format!("indices are not strictly increasing at entry {k} ({} after {})", indices[k], indices[k - 1]));
+        }
+        if let Some(&bad) = indices.iter().find(|&&x| x >= a.count) {
+            fail("ACCESSOR_SPARSE_INDEX_RANGE", format!("index {bad} is not below the accessor count {}", a.count));
+        }
+        ok.get()
+    }
+
+    /// The index list of `s`; the caller has checked type, view and range.
+    fn sparse_indices(&self, s: &crate::models::Sparse) -> Option<Vec<usize>> {
+        let size = component_size(s.indices.component_type)?;
+        let bytes = self.view_bytes(s.indices.buffer_view, s.indices.byte_offset.unwrap_or(0), size.checked_mul(s.count)?)?;
+        Some(
+            bytes
+                .chunks_exact(size)
+                .map(|c| match size {
+                    1 => c[0] as usize,
+                    2 => u16::from_le_bytes([c[0], c[1]]) as usize,
+                    _ => u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as usize,
+                })
+                .collect(),
+        )
+    }
+
+    /// Call `f(element index, components)` for every element of the substituted array that
+    /// is not shadowed: base elements the sparse data does not replace, then the sparse values.
+    /// A zero base (no view) yields one zero element if any are left. `None` if unreadable.
+    fn for_each_effective(&self, i: usize, f: &mut dyn FnMut(usize, Vec<f64>)) -> Option<()> {
+        let a = self.accessors.get(i)?;
+        let sparse = match &a.sparse {
+            Some(s) => {
+                let indices = self.sparse_indices(s)?;
+                let elem = element_size(a.component_type, &a.type_)?;
+                let bytes = self.view_bytes(s.values.buffer_view, s.values.byte_offset.unwrap_or(0), elem.checked_mul(s.count)?)?;
+                let values: Vec<Vec<f64>> =
+                    bytes.chunks_exact(elem).map(|c| decode_element(a.component_type, &a.type_, c)).collect::<Option<_>>()?;
+                Some((indices, values))
+            }
+            None => None,
+        };
+        let replaced = |e: usize| sparse.as_ref().is_some_and(|(idx, _)| idx.binary_search(&e).is_ok());
+        if a.buffer_view.is_some() {
+            for (e, bytes) in self.accessor_elements(i)?.1.enumerate() {
+                if !replaced(e) {
+                    f(e, decode_element(a.component_type, &a.type_, bytes)?);
+                }
+            }
+        } else if let Some((idx, _)) = &sparse {
+            let gap = idx.iter().enumerate().find(|&(k, &x)| k != x).map_or(idx.len(), |(k, _)| k);
+            if gap < a.count {
+                let comps = type_shape(&a.type_).map(|(c, r)| c * r)?;
+                f(gap, vec![0.0; comps]);
+            }
+        }
+        for (k, v) in sparse.into_iter().flat_map(|(idx, vals)| idx.into_iter().zip(vals)) {
+            f(k, v);
+        }
+        Some(())
     }
 
     /// Shape checks on `min`/`max`: length, value domain, order. Returns whether both are
@@ -396,12 +522,11 @@ impl<'a> Doc<'a> {
 
     /// Compare the data with the accessor's bounds and look for NaN / infinity.
     fn check_data(&self, i: usize, bounds_ok: bool, r: &mut ValidationReport) {
-        let Some((a, elems)) = self.accessor_elements(i) else { return };
+        let Some(a) = self.accessors.get(i) else { return };
         let is_float = a.component_type == 5126;
         let mut seen: Option<(Vec<f64>, Vec<f64>)> = None;
         let mut nonfinite = None;
-        for (e, bytes) in elems.enumerate() {
-            let Some(vals) = decode_element(a.component_type, &a.type_, bytes) else { return };
+        let readable = self.for_each_effective(i, &mut |e, vals| {
             if is_float && nonfinite.is_none() && vals.iter().any(|v| !v.is_finite()) {
                 nonfinite = Some(e);
             }
@@ -414,6 +539,9 @@ impl<'a> Doc<'a> {
                     }
                 }
             }
+        });
+        if readable.is_none() {
+            return;
         }
         if let Some(e) = nonfinite {
             r.errors.push(format!("ACCESSOR_DATA_NONFINITE: accessor {i} element {e} contains NaN or infinity"));
