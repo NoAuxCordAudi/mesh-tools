@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.16.0
+
+Scenes and node matrices. The README Scenes row is now Full. Nodes stays Partial (no camera
+reference; there is no Cameras API yet). Output of existing code is byte-identical.
+
+### Added
+- Scenes: `set_default_scene`, `clear_default_scene`, `add_scene_checked`, `add_node_to_scene`;
+  docs/SCENES.md (doctested).
+- Nodes: `add_node_with_matrix`, `set_node_matrix` (rejects nodes with TRS or a TRS animation
+  channel, never clears anything), `clear_node_matrix`, `set_node_transform` (rejects matrix nodes
+  and non-finite or zero values), `GltfBuilder::matrix_from_trs`; docs/NODES.md (doctested).
+- Validator errors: `SCENE_NODES_EMPTY`, `SCENE_NODE_DUPLICATE`, `NODE_MATRIX_NOT_FINITE`,
+  `NODE_MATRIX_NOT_AFFINE`, `NODE_MATRIX_NOT_DECOMPOSABLE` (singular; a negative determinant is
+  legal), `NODE_TRANSLATION_NOT_FINITE`, `NODE_SCALE_NOT_FINITE`, `NODE_ROTATION_NOT_FINITE`,
+  `NODE_ROTATION_NOT_UNIT`, `NODE_CHILDREN_EMPTY`.
+- Validator warnings: `NO_DEFAULT_SCENE` (scenes exist, none is the default), `NODE_SCALE_ZERO`,
+  `NODE_MATRIX_SHEAR` (shear is only a warning: the spec requires a matrix decomposable to TRS).
+
+### Changed
+- `add_scene` selects the default scene only for the first scene, so a later scene no longer
+  undoes `clear_default_scene`. Without a clear, behavior is unchanged.
+- The new node and scene errors apply to hand-edited documents only (the builder's `add_node*`
+  already normalizes rotations and never writes empty lists), like the 0.6.0 animation strictness.
+  A hand-set `matrix` of all zeros now also reports `NODE_MATRIX_NOT_AFFINE`.
+
 ## 0.15.0
 
 Morph target tangents and sparse deltas. The README Morph Targets row is now Full (core `FLOAT`

@@ -901,6 +901,10 @@ impl<'a> Doc<'a> {
                     r.errors.push(format!("NODE_MESH_INVALID: node {i} references mesh {m} ({} meshes)", self.meshes.len()));
                 }
             }
+            self.check_node_transform(i, node, r);
+            if node.children.as_ref().is_some_and(|c| c.is_empty()) {
+                r.errors.push(format!("NODE_CHILDREN_EMPTY: node {i} has an empty children list (omit it instead)"));
+            }
             if node.matrix.is_some() && (node.translation.is_some() || node.rotation.is_some() || node.scale.is_some()) {
                 r.errors.push(format!("NODE_MATRIX_AND_TRS: node {i} has both a matrix and translation/rotation/scale"));
             }
@@ -922,6 +926,39 @@ impl<'a> Doc<'a> {
         parents
     }
 
+    fn check_node_transform(&self, i: usize, node: &crate::models::Node, r: &mut ValidationReport) {
+        use crate::builder_node::{matrix_has_shear, matrix_problem, UNIT_TOLERANCE};
+        if let Some(m) = &node.matrix {
+            match matrix_problem(m) {
+                Some((code, msg)) => r.errors.push(format!("{code}: node {i}: {msg}")),
+                None if matrix_has_shear(m) => r.warnings.push(format!(
+                    "NODE_MATRIX_SHEAR: node {i} matrix has shear; it is not exactly a TRS transform and viewers may differ"
+                )),
+                None => {}
+            }
+        }
+        if node.translation.is_some_and(|t| t.iter().any(|v| !v.is_finite())) {
+            r.errors.push(format!("NODE_TRANSLATION_NOT_FINITE: node {i} translation is not finite"));
+        }
+        if let Some(s) = node.scale {
+            if s.iter().any(|v| !v.is_finite()) {
+                r.errors.push(format!("NODE_SCALE_NOT_FINITE: node {i} scale is not finite"));
+            } else if s.contains(&0.0) {
+                r.warnings.push(format!("NODE_SCALE_ZERO: node {i} has a zero scale component; the node is degenerate"));
+            }
+        }
+        if let Some(q) = node.rotation {
+            if q.iter().any(|v| !v.is_finite()) {
+                r.errors.push(format!("NODE_ROTATION_NOT_FINITE: node {i} rotation is not finite"));
+            } else {
+                let len = q.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>().sqrt();
+                if (len - 1.0).abs() > UNIT_TOLERANCE {
+                    r.errors.push(format!("NODE_ROTATION_NOT_UNIT: node {i} rotation {q:?} has length {len}"));
+                }
+            }
+        }
+    }
+
     fn check_scenes(&self, parents: &[Option<usize>], r: &mut ValidationReport) {
         let scenes = self.b.gltf.scenes.as_deref().unwrap_or(&[]);
         if let Some(s) = self.b.gltf.scene {
@@ -929,7 +966,19 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!("SCENE_DEFAULT_INVALID: default scene {s} does not exist ({} scenes)", scenes.len()));
             }
         }
+        if !scenes.is_empty() && self.b.gltf.scene.is_none() {
+            r.warnings.push("NO_DEFAULT_SCENE: the document has scenes but no default scene".to_string());
+        }
         for (si, scene) in scenes.iter().enumerate() {
+            if scene.nodes.as_ref().is_some_and(|n| n.is_empty()) {
+                r.errors.push(format!("SCENE_NODES_EMPTY: scene {si} has an empty nodes list (omit it instead)"));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for &n in scene.nodes.iter().flatten() {
+                if !seen.insert(n) {
+                    r.errors.push(format!("SCENE_NODE_DUPLICATE: scene {si} lists node {n} more than once"));
+                }
+            }
             for &n in scene.nodes.iter().flatten() {
                 if n >= self.nodes.len() {
                     r.errors.push(format!("SCENE_NODE_INVALID: scene {si} lists node {n} ({} nodes)", self.nodes.len()));

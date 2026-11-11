@@ -89,6 +89,7 @@ mod builder_skin;             // Implementations for skin handling
 mod builder_morph;            // Implementations for morph target handling
 mod uri;                      // Percent-encoding and data: URIs
 mod builder_export;           // Buffer encodings and .gltf export
+mod builder_node;             // Scenes, node matrices and transforms
 mod builder_extensions;       // Extensions, extras and asset metadata
 mod builder_mesh;             // Primitive and mesh creation
 mod primitive_spec;           // Primitive modes, specs and helpers
@@ -170,3 +171,13 @@ struct BuffersGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/TEXTURES.md")]
 struct TexturesGuideDoctests;
+
+// Likewise for docs/SCENES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/SCENES.md")]
+struct ScenesGuideDoctests;
+
+// Likewise for docs/NODES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/NODES.md")]
+struct NodesGuideDoctests;

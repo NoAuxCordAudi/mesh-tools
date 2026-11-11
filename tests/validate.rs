@@ -27,6 +27,8 @@ fn valid_skinned() -> (GltfBuilder, Vec<usize>, usize, usize, usize) {
     (b, joints, mesh, skin, node)
 }
 
+const IDENTITY_MATRIX: [f32; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+
 #[track_caller]
 fn assert_error(b: &GltfBuilder, code: &str) {
     let r = b.validate();
@@ -174,7 +176,7 @@ fn hierarchy_errors() {
 
     let mut b = GltfBuilder::new();
     let n = b.add_node(None, None, Some([1.0, 0.0, 0.0]), None, None);
-    b.gltf.nodes.as_mut().unwrap()[n].matrix = Some([0.0; 16]);
+    b.gltf.nodes.as_mut().unwrap()[n].matrix = Some(IDENTITY_MATRIX);
     assert_error(&b, "NODE_MATRIX_AND_TRS");
 }
 
@@ -275,7 +277,7 @@ fn animation_errors() {
     b.gltf.accessors.as_mut().unwrap()[input].min = None;
     assert_error(&b, "ANIMATION_INPUT_NO_BOUNDS");
     let mut b = mk();
-    b.gltf.nodes.as_mut().unwrap()[0].matrix = Some([0.0; 16]);
+    b.gltf.nodes.as_mut().unwrap()[0].matrix = Some(IDENTITY_MATRIX);
     assert_error(&b, "ANIMATION_CHANNEL_NODE_MATRIX");
 }
 

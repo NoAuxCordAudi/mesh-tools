@@ -209,6 +209,20 @@ fn instancing_doc() -> GltfBuilder {
     b
 }
 
+/// Two scenes with the second as default, a mirrored matrix node, and a TRS node.
+fn scenes_matrix_doc() -> GltfBuilder {
+    let mut b = GltfBuilder::new();
+    let mesh = b.create_box(0.5);
+    let mut mirror = GltfBuilder::matrix_from_trs([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0], [2.0; 3]);
+    mirror[0] = -2.0;
+    let m = b.add_node_with_matrix(Some("M".into()), Some(mesh), mirror).unwrap();
+    let t = b.add_node(Some("T".into()), Some(mesh), Some([0.0, 1.0, 0.0]), None, None);
+    b.add_scene_checked(Some("A".into()), vec![m]).unwrap();
+    let s = b.add_scene_checked(Some("B".into()), vec![t]).unwrap();
+    b.set_default_scene(s).unwrap();
+    b
+}
+
 fn animation_doc() -> GltfBuilder {
     let mut b = GltfBuilder::new();
     let mesh = b.create_box(1.0);
@@ -332,6 +346,7 @@ fn corpus() -> Vec<(&'static str, GltfBuilder)> {
         ("pbr_slots", pbr_slots_doc()),
         ("hierarchy", hierarchy_doc()),
         ("instancing", instancing_doc()),
+        ("scenes_matrix", scenes_matrix_doc()),
         ("animation", animation_doc()),
         ("skinned", skinned_doc()),
         ("morph", morph_doc()),
@@ -383,8 +398,14 @@ fn corpus_reads_back_through_the_independent_gltf_crate() {
     for (name, b) in corpus() {
         let g = common::parse_glb(&b);
         assert!(g.document.meshes().count() >= 1, "{name}: no meshes");
-        assert_eq!(g.document.scenes().count(), 1, "{name}: scene count");
+        let expected = if name == "scenes_matrix" { 2 } else { 1 };
+        assert_eq!(g.document.scenes().count(), expected, "{name}: scene count");
     }
+    let g = common::parse_glb(&scenes_matrix_doc());
+    assert_eq!(g.document.default_scene().unwrap().name(), Some("B"));
+    let (t, _, s) = g.document.nodes().next().unwrap().transform().decomposed();
+    assert_eq!(t, [1.0, 2.0, 3.0]);
+    assert_eq!(s.iter().map(|v| v.abs()).collect::<Vec<_>>(), vec![2.0; 3]);
     let g = common::parse_glb(&morph_doc());
     let mesh = g.document.meshes().next().unwrap();
     assert_eq!(mesh.weights(), Some(&[0.5][..]));

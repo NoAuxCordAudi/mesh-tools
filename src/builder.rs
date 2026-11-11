@@ -91,7 +91,9 @@ impl GltfBuilder {
         }
     }
 
-    /// Add a scene to the glTF document
+    /// Add a scene to the glTF document. The first scene added becomes the default scene.
+    ///
+    /// Nothing is checked here; see [`GltfBuilder::add_scene_checked`] for a validated variant.
     pub fn add_scene(&mut self, name: Option<String>, nodes: Option<Vec<usize>>) -> usize {
         let scene = Scene {
             name,
@@ -103,8 +105,9 @@ impl GltfBuilder {
             let index = scenes.len();
             scenes.push(scene);
             
-            // Set as default scene if this is the first one
-            if self.gltf.scene.is_none() {
+            // The first scene becomes the default. Later scenes never reselect, so an
+            // explicit `clear_default_scene` is not undone.
+            if index == 0 {
                 self.gltf.scene = Some(0);
             }
             

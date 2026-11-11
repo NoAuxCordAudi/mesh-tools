@@ -146,7 +146,7 @@ impl GltfBuilder {
                 )));
             }
             let local = n.matrix.unwrap_or_else(|| {
-                local_trs_matrix(
+                GltfBuilder::matrix_from_trs(
                     n.translation.unwrap_or([0.0; 3]),
                     n.rotation.unwrap_or([0.0, 0.0, 0.0, 1.0]),
                     n.scale.unwrap_or([1.0; 3]),
@@ -661,22 +661,6 @@ fn mat_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
         }
     }
     out
-}
-
-/// Local matrix `T * R * S` in column-major order. `q` is normalized here.
-fn local_trs_matrix(t: [f32; 3], q: [f32; 4], s: [f32; 3]) -> [f32; 16] {
-    let [x, y, z, w] = GltfBuilder::normalize_quaternion(q);
-    let r = [
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w),
-        2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w),
-        2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y),
-    ]; // three columns of the rotation matrix
-    [
-        r[0] * s[0], r[1] * s[0], r[2] * s[0], 0.0,
-        r[3] * s[1], r[4] * s[1], r[5] * s[1], 0.0,
-        r[6] * s[2], r[7] * s[2], r[8] * s[2], 0.0,
-        t[0], t[1], t[2], 1.0,
-    ]
 }
 
 /// Inverse of an affine column-major matrix, or `None` if it is singular or non-finite.
