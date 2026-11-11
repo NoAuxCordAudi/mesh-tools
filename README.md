@@ -193,8 +193,8 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Double Sided | ✅ Full | Flag for double-sided rendering |
 | | Material Variations | ⚠️ Partial | Metallic-roughness and specular-glossiness (KHR_materials_pbrSpecularGlossiness); texture `texCoord` is fixed to 0 |
 | **Textures** |||||
-| | Samplers | ⚠️ Partial | The model supports all filter and wrap modes; the builder creates a default sampler only |
-| | Images | ⚠️ Partial | Embedded PNG/JPEG through a buffer view; external `uri` is in the model but has no builder support |
+| | Samplers | ✅ Full | Typed `MagFilter`/`MinFilter`/`WrapMode` and `SamplerDesc` (all 108 combinations tested); `add_sampler`, `get_or_add_sampler` (dedup), one shared default sampler; `SAMPLER_*` and `TEXTURE_*` validation |
+| | Images | ⚠️ Partial | Embedded PNG/JPEG (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks) and external `uri` (`add_image_uri`); `data:` URIs are not supported yet, and WebP/KTX2 are out of scope |
 | | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets on meshes; specular-glossiness textures use set 0 |
 | **Animation** |||||
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |

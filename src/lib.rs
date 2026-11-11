@@ -75,6 +75,7 @@ pub mod material;    // Material creation and management
 pub mod mesh;        // Mesh creation and manipulation
 pub mod builder;     // Main GltfBuilder implementation
 pub mod accessor;    // Typed accessor writer types
+mod sampler;          // Typed sampler settings
 
 // Internal implementation modules
 mod builder_primitives;       // Implementations for primitive shape creation
@@ -99,6 +100,7 @@ pub use validate::ValidationReport;
 pub use builder_primitives::Triangle;
 pub use accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, Component, ComponentType, SparseSpec};
 pub use interleave::InterleavedAttribute;
+pub use sampler::{MagFilter, MinFilter, SamplerDesc, WrapMode};
 
 // Constants re-exports
 pub use constants::accessor_type;
@@ -149,3 +151,8 @@ struct MeshesGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/PRIMITIVE_MODES.md")]
 struct PrimitiveModesGuideDoctests;
+
+// Likewise for docs/TEXTURES.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/TEXTURES.md")]
+struct TexturesGuideDoctests;

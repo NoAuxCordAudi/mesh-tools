@@ -557,6 +557,9 @@ pub struct Image {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Sampler {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "magFilter")]
     pub mag_filter: Option<usize>,
     

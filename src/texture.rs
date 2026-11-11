@@ -75,7 +75,7 @@ impl From<std::io::Error> for TextureError {
 pub type Result<T> = std::result::Result<T, TextureError>;
 
 /// Represents a texture format
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
     PNG,
     JPEG,
@@ -88,6 +88,44 @@ impl TextureFormat {
             TextureFormat::PNG => "image/png",
             TextureFormat::JPEG => "image/jpeg",
         }
+    }
+
+    /// Detect the format from the leading magic number (PNG signature or JPEG `FF D8 FF`).
+    ///
+    /// ```
+    /// use mesh_tools::texture::TextureFormat;
+    /// assert_eq!(TextureFormat::from_magic(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(TextureFormat::JPEG));
+    /// assert_eq!(TextureFormat::from_magic(b"GIF89a"), None);
+    /// ```
+    pub fn from_magic(bytes: &[u8]) -> Option<TextureFormat> {
+        if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+            Some(TextureFormat::PNG)
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            Some(TextureFormat::JPEG)
+        } else {
+            None
+        }
+    }
+
+    /// The format for a MIME type (`image/png`, `image/jpeg`).
+    pub fn from_mime_type(mime: &str) -> Option<TextureFormat> {
+        match mime {
+            "image/png" => Some(TextureFormat::PNG),
+            "image/jpeg" => Some(TextureFormat::JPEG),
+            _ => None,
+        }
+    }
+
+    /// Read the pixel size from the header only (no pixel decoding).
+    ///
+    /// # Errors
+    /// [`TextureError`] if the bytes do not start with a valid header of this format.
+    pub fn header_dimensions(self, bytes: &[u8]) -> Result<(u32, u32)> {
+        let fmt = match self {
+            TextureFormat::PNG => image::ImageFormat::Png,
+            TextureFormat::JPEG => image::ImageFormat::Jpeg,
+        };
+        Ok(image::io::Reader::with_format(Cursor::new(bytes), fmt).into_dimensions()?)
     }
 }
 

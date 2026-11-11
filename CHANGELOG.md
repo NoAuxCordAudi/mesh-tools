@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.11.0
+
+Samplers and images. The README Samplers row is now Full. Images stays Partial until `data:` URIs
+are supported.
+
+### Added
+- `MagFilter`, `MinFilter`, `WrapMode` (with `code`/`from_code`) and `SamplerDesc`.
+- `GltfBuilder::add_sampler(SamplerDesc)` (always appends) and `get_or_add_sampler` (reuses the
+  first sampler equal to the description, with no extensions or extras).
+- Public `add_texture(name, image, sampler) -> Result<usize>`; missing image or sampler indices
+  are errors and leave the document unchanged.
+- `create_texture_from_image_with_sampler`, `add_image` (public), `add_image_bytes` (magic number
+  and header check, no pixel decoding), `add_image_uri` (empty and `data:` URIs rejected) and
+  `add_image_from_file` (format from the magic number).
+- `GltfBuilder::set_sampler_name` and the `name` field on the `Sampler` model (spec property that was missing).
+- `TextureFormat::from_magic`, `from_mime_type` and `header_dimensions`.
+- Validator errors `SAMPLER_MAG_FILTER_INVALID`, `SAMPLER_MIN_FILTER_INVALID`, `SAMPLER_WRAP_INVALID`,
+  `TEXTURE_SOURCE_OUT_OF_RANGE`, `TEXTURE_SAMPLER_OUT_OF_RANGE`, `IMAGE_SOURCE_AMBIGUOUS`,
+  `IMAGE_MIME_MISSING`, `IMAGE_MIME_INVALID`, `IMAGE_URI_EMPTY`, `IMAGE_BUFFER_VIEW_INVALID`,
+  `IMAGE_DATA_MISMATCH`, `IMAGE_DATA_UNDECODABLE`, `IMAGE_DIMENSIONS_INVALID`, and warnings
+  `SAMPLER_UNUSED` and `IMAGE_UNUSED`.
+- `docs/TEXTURES.md` (doctested).
+
+### Changed (breaking, pre-1.0)
+- Output change: `create_default_sampler` and the `create_*texture*` helpers now share one
+  deduplicated default sampler instead of adding one sampler per texture, so documents with
+  several textures have fewer samplers and different sampler indices. Single-texture documents
+  are unchanged. No golden test file was affected.
+- `add_sampler` is now public and takes a `SamplerDesc` (it was crate-private with four
+  `Option<usize>` arguments); `add_texture` is now public and returns `Result<usize>` (it was
+  crate-private and returned `usize`).
+- `TextureFormat` additionally derives `Eq`.
+- `validate()` now rejects invalid sampler codes, dangling texture references and malformed image
+  objects, and warns about unused samplers and images.
+
 ## 0.10.0
 
 Meshes and primitive types. The README Meshes and Primitive Types rows are now Full (core

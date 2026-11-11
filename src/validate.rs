@@ -23,6 +23,8 @@ use crate::builder::GltfBuilder;
 use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
 use crate::accessor::{component_size, decode_element, element_size, integer_range, type_shape};
 use crate::constants::buffer_view_target;
+use crate::sampler::{MagFilter, MinFilter, WrapMode};
+use crate::texture::TextureFormat;
 use crate::models::{Accessor, Mesh, Primitive};
 use crate::primitive_spec::check_primitive;
 
@@ -127,7 +129,116 @@ impl GltfBuilder {
         doc.check_skins(&parents, &mut r);
         doc.check_skinned_nodes(&mut r);
         doc.check_animations(&mut r);
+        doc.check_textures(&mut r);
         r
+    }
+}
+
+impl<'a> Doc<'a> {
+    /// Samplers, textures and images (glTF 3.7.x): code values, references, image sources and
+    /// embedded image headers (header only, pixels are not decoded).
+    fn check_textures(&self, r: &mut ValidationReport) {
+        let g = &self.b.gltf;
+        let samplers = g.samplers.as_deref().unwrap_or(&[]);
+        let textures = g.textures.as_deref().unwrap_or(&[]);
+        let images = g.images.as_deref().unwrap_or(&[]);
+        let views = g.buffer_views.as_deref().unwrap_or(&[]);
+
+        for (i, s) in samplers.iter().enumerate() {
+            if let Some(c) = s.mag_filter.filter(|&c| MagFilter::from_code(c).is_none()) {
+                r.errors.push(format!("SAMPLER_MAG_FILTER_INVALID: sampler {i} magFilter {c} is not 9728 or 9729"));
+            }
+            if let Some(c) = s.min_filter.filter(|&c| MinFilter::from_code(c).is_none()) {
+                r.errors.push(format!("SAMPLER_MIN_FILTER_INVALID: sampler {i} minFilter {c} is not 9728, 9729 or 9984-9987"));
+            }
+            for (axis, w) in [("wrapS", s.wrap_s), ("wrapT", s.wrap_t)] {
+                if let Some(c) = w.filter(|&c| WrapMode::from_code(c).is_none()) {
+                    r.errors.push(format!("SAMPLER_WRAP_INVALID: sampler {i} {axis} {c} is not 10497, 33071 or 33648"));
+                }
+            }
+        }
+
+        let mut sampler_used = vec![false; samplers.len()];
+        let mut image_used = vec![false; images.len()];
+        for (i, t) in textures.iter().enumerate() {
+            match image_used.get_mut(t.source) {
+                Some(u) => *u = true,
+                None => r.errors.push(format!(
+                    "TEXTURE_SOURCE_OUT_OF_RANGE: texture {i} references image {} ({} present)", t.source, images.len()
+                )),
+            }
+            if let Some(si) = t.sampler {
+                match sampler_used.get_mut(si) {
+                    Some(u) => *u = true,
+                    None => r.errors.push(format!(
+                        "TEXTURE_SAMPLER_OUT_OF_RANGE: texture {i} references sampler {si} ({} present)", samplers.len()
+                    )),
+                }
+            }
+        }
+        for (i, u) in sampler_used.iter().enumerate() {
+            if !u {
+                r.warnings.push(format!("SAMPLER_UNUSED: sampler {i} is not used by any texture"));
+            }
+        }
+        for (i, u) in image_used.iter().enumerate() {
+            if !u {
+                r.warnings.push(format!("IMAGE_UNUSED: image {i} is not used by any texture"));
+            }
+        }
+
+        for (i, im) in images.iter().enumerate() {
+            if im.uri.is_some() == im.buffer_view.is_some() {
+                r.errors.push(format!("IMAGE_SOURCE_AMBIGUOUS: image {i} needs exactly one of uri and bufferView"));
+            }
+            let format = match im.mime_type.as_deref() {
+                Some(m) => {
+                    let f = TextureFormat::from_mime_type(m);
+                    if f.is_none() {
+                        r.errors.push(format!("IMAGE_MIME_INVALID: image {i} mimeType {m:?} is not image/png or image/jpeg"));
+                    }
+                    f
+                }
+                None => {
+                    if im.buffer_view.is_some() {
+                        r.errors.push(format!("IMAGE_MIME_MISSING: image {i} uses a bufferView and needs a mimeType"));
+                    }
+                    None
+                }
+            };
+            if im.uri.as_deref() == Some("") {
+                r.errors.push(format!("IMAGE_URI_EMPTY: image {i} has an empty uri"));
+            }
+            let Some(vi) = im.buffer_view else { continue };
+            let Some(v) = views.get(vi) else {
+                r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} references buffer view {vi} ({} present)", views.len()));
+                continue;
+            };
+            if v.byte_stride.is_some() || v.target.is_some() {
+                r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} buffer view {vi} must not define byteStride or target"));
+            }
+            // Only buffer 0 has bytes in memory
+            let data = (v.buffer == 0)
+                .then(|| v.byte_offset.checked_add(v.byte_length))
+                .flatten()
+                .and_then(|end| self.b.buffer_data.get(v.byte_offset..end));
+            let Some(data) = data else {
+                r.errors.push(format!("IMAGE_BUFFER_VIEW_INVALID: image {i} buffer view {vi} does not lie inside the binary buffer"));
+                continue;
+            };
+            let Some(format) = format else { continue }; // mime problem already reported
+            if TextureFormat::from_magic(data) != Some(format) {
+                r.errors.push(format!("IMAGE_DATA_MISMATCH: image {i} bytes do not start with a {} signature", format.mime_type()));
+                continue;
+            }
+            match format.header_dimensions(data) {
+                Ok((w, h)) if w == 0 || h == 0 => {
+                    r.errors.push(format!("IMAGE_DIMENSIONS_INVALID: image {i} has size {w}x{h}"));
+                }
+                Ok(_) => {}
+                Err(e) => r.errors.push(format!("IMAGE_DATA_UNDECODABLE: image {i}: {e}")),
+            }
+        }
     }
 }
 
