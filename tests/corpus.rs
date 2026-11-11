@@ -520,6 +520,24 @@ fn allowlist_requires_a_reason() {
 }
 
 #[test]
+fn validator_version_must_match_the_pin() {
+    assert!(check_version("gltf_validator 2.0.0-dev.3.10\n", PINNED_VALIDATOR).is_ok());
+    let err = check_version("gltf_validator 2.0.0-dev.3.9\n", PINNED_VALIDATOR).unwrap_err();
+    assert!(err.contains("2.0.0-dev.3.10") && err.contains("3.9"), "{err}");
+    assert!(check_version("", PINNED_VALIDATOR).is_err());
+}
+
+#[test]
+fn validator_pin_matches_ci_and_local_script() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (file, needle) in [(".github/workflows/ci.yml", "GLTF_VALIDATOR_VERSION: "), ("tests/khronos/run.sh", "VERSION=")] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        let line = text.lines().find(|l| l.trim_start().starts_with(needle)).unwrap_or_else(|| panic!("{file}: no `{needle}` line"));
+        assert!(line.trim_start()[needle.len()..].trim() == PINNED_VALIDATOR, "{file} pins {line:?}, expected {PINNED_VALIDATOR}");
+    }
+}
+
+#[test]
 fn checked_in_allowlist_parses() {
     let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/khronos/allowlist.txt")).unwrap();
     parse_allowlist(&text).unwrap();
@@ -529,15 +547,38 @@ fn checked_in_allowlist_parses() {
 // Khronos validator runner
 // ---------------------------------------------------------------------------------------------
 
-/// Run the validator on `path` and return its issues. Panics (fails the test) if the binary is
-/// missing or its output is not a report: never a silent skip.
-fn run_khronos(path: &Path) -> Vec<Issue> {
+/// The validator release the corpus is triaged against (also pinned in `.github/workflows/ci.yml`).
+const PINNED_VALIDATOR: &str = "2.0.0-dev.3.10";
+
+/// Fail unless the binary's `--version` output names the pinned release, so a different
+/// validator cannot change the verdict unnoticed.
+fn check_version(version_output: &str, pinned: &str) -> Result<(), String> {
+    if version_output.contains(pinned) {
+        Ok(())
+    } else {
+        Err(format!("expected gltf_validator {pinned}, `--version` printed {:?}", version_output.trim()))
+    }
+}
+
+/// The validator binary from `GLTF_VALIDATOR`, checked once per call for the pinned version.
+/// Panics (fails the test) when unset, unusable or of another version: never a silent skip.
+fn validator_bin() -> String {
     let bin = std::env::var("GLTF_VALIDATOR").unwrap_or_else(|_| {
         panic!(
             "GLTF_VALIDATOR is not set. Install the pinned gltf_validator (see docs/VALIDATION.md) \
              and set GLTF_VALIDATOR=/path/to/gltf_validator, or do not pass --ignored."
         )
     });
+    let out = Command::new(&bin).arg("--version").output().unwrap_or_else(|e| panic!("cannot run GLTF_VALIDATOR={bin}: {e}"));
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    check_version(&text, PINNED_VALIDATOR).unwrap_or_else(|e| panic!("GLTF_VALIDATOR={bin}: {e}"));
+    bin
+}
+
+/// Run the validator on `path` and return its issues. Panics (fails the test) if the binary is
+/// missing or its output is not a report: never a silent skip.
+fn run_khronos(path: &Path) -> Vec<Issue> {
+    let bin = validator_bin();
     // -o: JSON report to stdout, -r: also validate embedded resources.
     let out = Command::new(&bin)
         .args(["-o", "-r"])

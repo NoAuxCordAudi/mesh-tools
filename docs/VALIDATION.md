@@ -35,6 +35,10 @@ CI pins `gltf_validator` 2.0.0-dev.3.10 (Linux release binary from
 GLTF_VALIDATOR=/path/to/gltf_validator cargo test --test corpus -- --ignored
 ```
 
+Locally, `tests/khronos/run.sh` downloads the pinned release into `target/khronos/`, optionally
+verifies it against `GLTF_VALIDATOR_SHA256`, and runs the same command. Any binary whose
+`--version` does not name the pinned release is rejected, so the verdict is reproducible.
+
 The two Khronos tests are `#[ignore]`d so a plain `cargo test` needs no binary and shows the
 reason. They never pass silently: with `--ignored`, a missing or unusable `GLTF_VALIDATOR`
 makes them fail. The CI job fails if the download or install fails.
@@ -49,6 +53,23 @@ Allow-list format, one entry per line, reason mandatory (an entry without one fa
 ```text
 CODE | why this finding is accepted
 ```
+
+### Status of the corpus run
+
+The Khronos corpus has **not been run locally**: the development sandbox blocks downloading and
+executing the release binary, so no real validator output exists yet. Instead the corpus was
+audited statically (a script independent of the crate parsed every `target/corpus/*.glb`)
+against the rules the validator is known to enforce: GLB chunk alignment, accessor alignment,
+`min`/`max` against the data, finite values, unit normals/tangents (w = +-1), weight sums,
+attribute count agreement, index range and primitive-restart values, mode count rules, degenerate
+triangles, `TEXCOORD_n` presence, skinned-mesh/skin pairing, inverse bind matrix shape,
+animation input monotonicity, unit rotations, undeclared extensions and PNG chunk CRCs.
+
+Triage: no error or warning findings. Expected infos only (not blocking): a normal texture
+without `TANGENT` (`MESH_PRIMITIVE_GENERATED_TANGENT_SPACE`, info) in `pbr_slots` and `textured`,
+and a joint node with no children (`NODE_EMPTY`, info) in `skinned`. The first real run happens
+in the CI `khronos-validator` job; any finding there must be fixed or, for a warning, allow-listed
+with a reason. No README row depends on the Khronos run yet.
 
 Known gap: the CI download is pinned by version but not by checksum.
 
