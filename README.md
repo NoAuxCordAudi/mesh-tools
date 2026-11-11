@@ -100,6 +100,11 @@ The library exports GLB (binary glTF) and validates the document before writing 
 - Binary data padding and structure according to glTF spec
 - Vertex attributes: positions, normals, UV sets and skinning joints/weights
 
+## Validation
+
+Besides the built-in `validate()`, the test corpus is checked against the Khronos glTF-Validator
+in CI. See [docs/VALIDATION.md](docs/VALIDATION.md) for how to run it locally.
+
 ## Math Types and Compatibility Layer
 
 This library uses the lightweight [mint](https://crates.io/crates/mint) crate for mathematical types like `Point3`, `Vector2`, and `Vector3`. A compatibility layer is provided to make working with these types easy:

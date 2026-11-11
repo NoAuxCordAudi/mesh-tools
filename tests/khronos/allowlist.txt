@@ -1,0 +1,4 @@
+# Khronos glTF-Validator findings that are accepted on the corpus.
+# Format: CODE | reason       (one per line; the reason is mandatory)
+# Errors can never be allow-listed; only warnings. Keep this file empty unless a finding is
+# understood and deliberately accepted. See docs/VALIDATION.md.

@@ -465,6 +465,7 @@ impl GltfBuilder {
             indices: Some(idx_accessor),
             material,
             mode: None, // Default mode (triangles)
+            ..Default::default()
         };
         
         // Create and add mesh

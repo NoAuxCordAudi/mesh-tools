@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.1
+
+Validation harness. No library behavior changes.
+
+### Added
+- `tests/corpus.rs`: one document per README feature, written to `target/corpus/*.glb`, checked
+  by the in-crate validator and read back through the independent `gltf` crate.
+- Khronos glTF-Validator (pinned 2.0.0-dev.3.10) integration: a CI job runs it on the corpus and
+  fails on any error or any warning not in `tests/khronos/allowlist.txt`. It fails (never
+  skips) when the binary is missing. Locally, opt in with `GLTF_VALIDATOR=/path/to/gltf_validator
+  cargo test --test corpus -- --ignored`.
+- Negative cross-checks: documents broken through the public `gltf` field must be rejected by
+  both the in-crate validator and the Khronos validator, with the code mapping recorded in
+  `docs/VALIDATION.md`.
+- The `gltf` dev-dependency enables the `extras`, `extensions`, `names`,
+  `KHR_materials_pbrSpecularGlossiness` and `KHR_texture_transform` features.
+
 ## 0.6.0
 
 Morph targets (blend shapes) and morph target weights animation.

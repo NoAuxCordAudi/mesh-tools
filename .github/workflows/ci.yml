@@ -18,3 +18,22 @@ jobs:
         run: cargo run --example skeletal_animation_demo -- "$RUNNER_TEMP/arm.glb"
       - name: Morph demo exports and verifies its own output
         run: cargo run --example morph_demo -- "$RUNNER_TEMP/morph.glb"
+
+  khronos-validator:
+    # Fails (never skips) if the validator cannot be installed or run.
+    runs-on: ubuntu-latest
+    env:
+      GLTF_VALIDATOR_VERSION: 2.0.0-dev.3.10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned gltf_validator
+        run: |
+          set -euo pipefail
+          url="https://github.com/KhronosGroup/glTF-Validator/releases/download/${GLTF_VALIDATOR_VERSION}/gltf_validator-${GLTF_VALIDATOR_VERSION}-linux64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/gltf-validator"
+          curl -fsSL "$url" | tar -xJ -C "$RUNNER_TEMP/gltf-validator"
+          test -x "$RUNNER_TEMP/gltf-validator/gltf_validator"
+          echo "GLTF_VALIDATOR=$RUNNER_TEMP/gltf-validator/gltf_validator" >> "$GITHUB_ENV"
+      - name: Corpus passes the Khronos validator, negatives are rejected
+        run: cargo test --test corpus -- --ignored

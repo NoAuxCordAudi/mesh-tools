@@ -114,3 +114,8 @@ struct SkinningGuideDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../docs/MORPH_TARGETS.md")]
 struct MorphTargetsGuideDoctests;
+
+// Likewise for docs/VALIDATION.md.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/VALIDATION.md")]
+struct ValidationGuideDoctests;
