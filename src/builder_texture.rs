@@ -111,14 +111,14 @@ impl GltfBuilder {
             cell_size, 
             color1, 
             color2
-        );
+        )?;
         
         self.create_texture_from_image(Some("checkerboard".to_string()), &image, texture::TextureFormat::PNG)
     }
     
     /// Create a UV test pattern texture (for testing)
     pub fn create_uv_test_texture(&mut self, width: u32, height: u32) -> Result<usize> {
-        let image = texture::create_uv_test_pattern(width, height);
+        let image = texture::create_uv_test_pattern(width, height)?;
         
         self.create_texture_from_image(Some("uv_test".to_string()), &image, texture::TextureFormat::PNG)
     }

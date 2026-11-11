@@ -5,6 +5,9 @@
 Morph targets (blend shapes) and morph target weights animation.
 
 ### Fixed
+- `generate_plane` / `create_plane`: triangles wound clockwise seen from +Y (back-facing against the
+  +Y normals); now counter-clockwise. 0 width or depth segments produced NaN positions; counts
+  below 1 are now raised to 1.
 - `generate_cylinder` / `generate_cone` (and `create_cylinder` / `create_cone`): cap centre
   vertices were indexed at `positions.len() / 3` instead of `positions.len()`, so caps fanned
   from an unrelated vertex; side and cap triangles wound inward (clockwise from outside); sloped
@@ -13,6 +16,9 @@ Morph targets (blend shapes) and morph target weights animation.
   now skipped. Output geometry of these shapes changes accordingly.
 
 ### Breaking changes
+- `texture::generate_checkerboard`, `create_colored_checkerboard` and `create_uv_test_pattern`
+  now return `Result` (new `TextureError::InvalidParameter`): a zero cell size (or a UV test
+  pattern narrower than 8 px) used to panic with a division by zero.
 - `Primitive`, `Mesh` and `Node` gain public fields (`Primitive.targets`, `Mesh.weights`,
   `Mesh.extras`, `Node.weights`). Code that builds these structs with a struct literal must add
   `..Default::default()`, and exhaustive destructuring patterns need `..`. The types still

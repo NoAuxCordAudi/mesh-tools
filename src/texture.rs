@@ -19,7 +19,7 @@
 //! // Create a test pattern texture
 //! let width = 512;
 //! let height = 512;
-//! let texture_image: DynamicImage = texture::create_uv_test_pattern(width, height);
+//! let texture_image: DynamicImage = texture::create_uv_test_pattern(width, height).unwrap();
 //! ```
 
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -35,6 +35,8 @@ use std::error::Error as StdError;
 pub enum TextureError {
     ImageError(image::ImageError),
     IoError(std::io::Error),
+    /// A parameter was out of range (for example a zero checkerboard cell size)
+    InvalidParameter(String),
 }
 
 impl fmt::Display for TextureError {
@@ -42,6 +44,7 @@ impl fmt::Display for TextureError {
         match self {
             TextureError::ImageError(err) => write!(f, "Image error: {}", err),
             TextureError::IoError(err) => write!(f, "IO error: {}", err),
+            TextureError::InvalidParameter(msg) => write!(f, "Invalid parameter: {}", msg),
         }
     }
 }
@@ -51,6 +54,7 @@ impl StdError for TextureError {
         match self {
             TextureError::ImageError(err) => Some(err),
             TextureError::IoError(err) => Some(err),
+            TextureError::InvalidParameter(_) => None,
         }
     }
 }
@@ -88,13 +92,19 @@ impl TextureFormat {
 }
 
 /// Generate a checkerboard pattern
+///
+/// # Errors
+/// Returns [`TextureError::InvalidParameter`] if `cell_size` is 0.
 pub fn generate_checkerboard(
     width: u32,
     height: u32,
     cell_size: u32,
     color1: Rgba<u8>,
     color2: Rgba<u8>,
-) -> DynamicImage {
+) -> Result<DynamicImage> {
+    if cell_size == 0 {
+        return Err(TextureError::InvalidParameter("checkerboard cell_size must be at least 1".to_string()));
+    }
     let mut img = ImageBuffer::new(width, height);
 
     for y in 0..height {
@@ -113,7 +123,7 @@ pub fn generate_checkerboard(
         }
     }
 
-    DynamicImage::ImageRgba8(img)
+    Ok(DynamicImage::ImageRgba8(img))
 }
 
 /// Convert a dynamic image to PNG bytes
@@ -140,8 +150,11 @@ pub fn image_to_bytes(image: &DynamicImage, format: TextureFormat) -> Result<Vec
     }
 }
 
-/// Create a simple UV test pattern (checkerboard)
-pub fn create_uv_test_pattern(width: u32, height: u32) -> DynamicImage {
+/// Create a simple UV test pattern (8x8 checkerboard)
+///
+/// # Errors
+/// Returns [`TextureError::InvalidParameter`] if `width` is less than 8 (cells would be empty).
+pub fn create_uv_test_pattern(width: u32, height: u32) -> Result<DynamicImage> {
     generate_checkerboard(
         width,
         height,
@@ -152,13 +165,16 @@ pub fn create_uv_test_pattern(width: u32, height: u32) -> DynamicImage {
 }
 
 /// Create a colored checkerboard pattern
+///
+/// # Errors
+/// Returns [`TextureError::InvalidParameter`] if `cell_size` is 0.
 pub fn create_colored_checkerboard(
     width: u32, 
     height: u32,
     cell_size: u32,
     color1: [u8; 3],
     color2: [u8; 3],
-) -> DynamicImage {
+) -> Result<DynamicImage> {
     generate_checkerboard(
         width,
         height,

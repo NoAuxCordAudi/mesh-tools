@@ -31,10 +31,11 @@ use crate::builder_primitives::Triangle;
 /// * `width` - Width of the plane along X axis
 /// * `depth` - Depth of the plane along Z axis 
 /// * `width_segments` - Number of subdivisions along width
-/// * `depth_segments` - Number of subdivisions along depth
+/// * `depth_segments` - Number of subdivisions along depth (segment counts below 1 are raised to 1)
 /// 
 /// # Returns
-/// Tuple of (positions, indices, normals, uvs)
+/// Tuple of (positions, indices, normals, uvs). The plane faces +Y: triangles are
+/// counter-clockwise seen from above, matching the +Y normals.
 pub fn generate_plane(
     width: f32,
     depth: f32,
@@ -44,13 +45,8 @@ pub fn generate_plane(
     let width_half = width / 2.0;
     let depth_half = depth / 2.0;
     
-    let grid_x = width_segments;
-    let grid_z = depth_segments;
-    
-    // Segment dimensions not actually used directly in this implementation
-    // but kept for clarity and possible future enhancements
-    let _segment_width = width / grid_x as f32;
-    let _segment_depth = depth / grid_z as f32;
+    let grid_x = width_segments.max(1);
+    let grid_z = depth_segments.max(1);
     
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -88,9 +84,9 @@ pub fn generate_plane(
             let c = ((z + 1) * vertices_per_row + x + 1) as u32;
             let d = ((z + 1) * vertices_per_row + x) as u32;
             
-            // Two triangles per grid cell
-            indices.push(Triangle::new(a, b, d));
-            indices.push(Triangle::new(b, c, d));
+            // Counter-clockwise seen from +Y
+            indices.push(Triangle::new(a, d, b));
+            indices.push(Triangle::new(b, d, c));
         }
     }
     
