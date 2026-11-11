@@ -529,7 +529,9 @@ impl<'a> Doc<'a> {
                 if a.byte_offset.is_some() {
                     r.errors.push(format!("ACCESSOR_BUFFER_VIEW_MISSING: accessor {i} has a byteOffset but no bufferView"));
                 }
-                if a.sparse.is_some() && sparse_ok {
+                if a.sparse.is_none() {
+                    r.warnings.push(format!("ACCESSOR_NO_DATA: accessor {i} has no bufferView and no sparse, so it reads as all zeros"));
+                } else if sparse_ok {
                     self.check_data(i, bounds_ok, r);
                 }
                 continue;
@@ -1295,7 +1297,7 @@ impl<'a> Doc<'a> {
         };
         if matches!(name, "POSITION" | "NORMAL" | "TANGENT") && (a.type_ != "VEC3" || a.component_type != 5126) {
             r.errors.push(format!(
-                "MORPH_TARGET_TYPE: {at} accessor {acc} must be FLOAT VEC3, found {} with component type {}", a.type_, a.component_type
+                "MORPH_TARGET_TYPE: {at} accessor {acc} must be FLOAT VEC3, found {} with component type {}{} (normalized-integer deltas need KHR_mesh_quantization, which is not supported)", a.type_, a.component_type, if a.normalized == Some(true) { " normalized" } else { "" }
             ));
         }
         if let Some(b) = self.accessors.get(base_acc) {

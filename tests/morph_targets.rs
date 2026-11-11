@@ -1,7 +1,7 @@
 mod common;
 
 use gltf::accessor::{DataType, Dimensions};
-use mesh_tools::{GltfBuilder, GltfError, JointIndices, MorphTarget, Primitive, SkinSet};
+use mesh_tools::{GltfBuilder, GltfError, JointIndices, MorphDelta, MorphTarget, Primitive, SkinSet};
 
 /// Triangle with base normals, as a skinned primitive (one joint). Not yet added to a mesh.
 fn base_primitive(b: &mut GltfBuilder) -> Primitive {
@@ -122,7 +122,7 @@ fn invalid_input_is_rejected_atomically_with_actionable_messages() {
         ("target without deltas", vec![ok(), MorphTarget::new()], "morph target 1 has no deltas"),
         ("short positions", vec![MorphTarget::new().with_positions(vec![0.0; 6])], "expected 9"),
         ("long normals", vec![ok(), MorphTarget::new().with_normals(vec![0.0; 12])], "morph target 1: normal deltas have 12"),
-        ("tangents", vec![MorphTarget::new().with_positions(D0.to_vec()).with_tangents(vec![0.0; 9])], "tangent deltas are not supported"),
+        ("tangents without base", vec![MorphTarget::new().with_positions(D0.to_vec()).with_tangents(vec![0.0; 9])], "tangent deltas but the primitive has no base TANGENT"),
         ("nan", vec![MorphTarget::new().with_positions(vec![0.0, f32::NAN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])], "value 1 is not finite"),
         ("inf", vec![ok(), MorphTarget::new().with_positions(vec![f32::INFINITY; 9])], "morph target 1"),
     ];
@@ -180,5 +180,8 @@ fn morph_target_builder_methods_set_exactly_their_field() {
     assert_eq!(m, MorphTarget::default());
     assert!(m.positions.is_none() && m.normals.is_none() && m.tangents.is_none());
     let m = MorphTarget::new().with_positions(vec![1.0]).with_normals(vec![2.0]).with_tangents(vec![3.0]);
-    assert_eq!((m.positions, m.normals, m.tangents), (Some(vec![1.0]), Some(vec![2.0]), Some(vec![3.0])));
+    assert_eq!(
+        (m.positions, m.normals, m.tangents),
+        (Some(MorphDelta::Dense(vec![1.0])), Some(MorphDelta::Dense(vec![2.0])), Some(MorphDelta::Dense(vec![3.0])))
+    );
 }

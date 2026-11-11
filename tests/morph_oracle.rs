@@ -358,3 +358,46 @@ fn animated_weights_outside_zero_one_are_not_clamped() {
     // Midpoint, by hand: (-1 + 3) / 2 = 1.0 and (2 + -0.5) / 2 = 0.75.
     assert_weights(&sample(&t, &out, 2, interp, 0.5), &[1.0, 0.75]);
 }
+
+#[test]
+fn sparse_and_dense_targets_morph_identically() {
+    // T1 as sparse: vertex 0 has (1,0,0), vertex 1 (0,2,0), vertex 2 (-1,-1,0) (all non-zero),
+    // T0 only moves vertex 1 by (0,0,1). Dense counterpart has zeros elsewhere.
+    let build = |sparse: bool| {
+        let mut b = GltfBuilder::new();
+        let mut prim = b.create_primitive(mesh_tools::PrimitiveSpec {
+            positions: flat(&BASE),
+            indices: Some(mesh_tools::Indices::U8(vec![0, 1, 2])),
+            ..Default::default()
+        }).unwrap();
+        let t0 = if sparse {
+            MorphTarget::new().with_sparse_positions(vec![1], vec![0.0, 0.0, 1.0])
+        } else {
+            MorphTarget::new().with_positions(vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        };
+        let t1 = if sparse {
+            MorphTarget::new().with_sparse_positions(vec![0, 1, 2], flat(&T1))
+        } else {
+            MorphTarget::new().with_positions(flat(&T1))
+        };
+        b.attach_morph_targets(&mut prim, &[t0, t1]).unwrap();
+        let mesh = b.add_morphable_mesh(None, vec![prim], Some(vec![0.5, 0.25]), None).unwrap();
+        let n = b.add_node(None, Some(mesh), None, None, None);
+        b.add_scene(None, Some(vec![n]));
+        b
+    };
+    let read_morphed = |b: &GltfBuilder| {
+        let glb = common::parse_glb(b);
+        let prim = glb.document.meshes().next().unwrap().primitives().next().unwrap();
+        let r = prim.reader(|_| glb.blob.as_deref());
+        let base: Vec<V3> = r.read_positions().unwrap().collect();
+        let deltas: Vec<Vec<V3>> = r.read_morph_targets().map(|(p, _, _)| p.unwrap().collect()).collect();
+        let m = Morphable { base, base_normals: vec![], pos_deltas: deltas, nrm_deltas: vec![], weights: vec![] };
+        morphed(&m, &[0.5, 0.25])
+    };
+    // Hand oracle at w = (0.5, 0.25): v0 = (0,0,0)+.25*(1,0,0); v1 = (1,0,0)+.5*(0,0,1)+.25*(0,2,0);
+    // v2 = (0,1,0)+.25*(-1,-1,0).
+    let want = [[0.25, 0.0, 0.0], [1.0, 0.5, 0.5], [-0.25, 0.75, 0.0]];
+    assert_all_close(&read_morphed(&build(true)), &want);
+    assert_all_close(&read_morphed(&build(false)), &want);
+}

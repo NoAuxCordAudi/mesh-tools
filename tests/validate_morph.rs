@@ -110,6 +110,12 @@ fn target_accessor_type_and_count_errors() {
         let indices = prim(b).indices.unwrap(); // a SCALAR unsigned accessor
         prim(b).targets.as_mut().unwrap()[0].insert("POSITION".into(), indices);
     });
+    // Normalized-integer deltas need KHR_mesh_quantization, which is not supported.
+    assert_error("MORPH_TARGET_TYPE", |b| {
+        let spec = mesh_tools::AccessorSpec::new().with_normalized(true);
+        let acc = b.add_accessor_from_slice(&[0i16; 9], mesh_tools::AccessorType::Vec3, spec).unwrap();
+        prim(b).targets.as_mut().unwrap()[0].insert("POSITION".into(), acc);
+    });
     assert_error("MORPH_TARGET_COUNT_MISMATCH", |b| {
         let acc = prim(b).targets.as_ref().unwrap()[0]["POSITION"];
         b.gltf.accessors.as_mut().unwrap()[acc].count = 2;
@@ -182,4 +188,52 @@ fn export_refuses_a_non_finite_weight_instead_of_writing_null() {
     b.gltf.meshes.as_mut().unwrap()[0].weights = Some(vec![f32::NAN, 0.0]);
     let Err(GltfError::InvalidData(msg)) = b.to_glb_bytes() else { panic!("expected InvalidData") };
     assert!(msg.contains("MESH_WEIGHTS_NOT_FINITE"), "{msg}");
+}
+
+#[test]
+fn sparse_target_accessor_count_is_checked_against_the_base() {
+    let sparse = |b: &mut GltfBuilder| {
+        let mut p = skinned_primitive(b);
+        let t = MorphTarget::new().with_sparse_positions(vec![1], vec![0.0, 0.0, 1.0]);
+        b.attach_morph_targets(&mut p, &[t]).unwrap();
+        let acc = p.targets.as_ref().unwrap()[0]["POSITION"];
+        (p, acc)
+    };
+    let mut b = GltfBuilder::new();
+    let (p, acc) = sparse(&mut b);
+    b.add_morphable_mesh(None, vec![p], None, None).unwrap();
+    let r = b.validate();
+    assert!(r.errors.is_empty() && r.warnings.iter().all(|w| !w.starts_with("MORPH_TARGET")), "{r:?}");
+    b.gltf.accessors.as_mut().unwrap()[acc].count = 2;
+    assert!(b.validate().has_error("MORPH_TARGET_COUNT_MISMATCH"));
+}
+
+#[test]
+fn accessor_without_data_warns() {
+    assert_warning("ACCESSOR_NO_DATA", |b| {
+        let acc = prim(b).targets.as_ref().unwrap()[0]["POSITION"];
+        b.gltf.accessors.as_mut().unwrap()[acc].buffer_view = None;
+    });
+}
+
+#[test]
+fn normalized_delta_message_names_the_missing_extension() {
+    let r = edited(|b| {
+        let spec = mesh_tools::AccessorSpec::new().with_normalized(true);
+        let acc = b.add_accessor_from_slice(&[0i16; 9], mesh_tools::AccessorType::Vec3, spec).unwrap();
+        prim(b).targets.as_mut().unwrap()[0].insert("POSITION".into(), acc);
+    });
+    assert!(r.errors.iter().any(|e| e.starts_with("MORPH_TARGET_TYPE") && e.contains("KHR_mesh_quantization")), "{:?}", r.errors);
+}
+
+#[test]
+fn huge_base_vertex_count_is_an_error_not_an_overflow_panic() {
+    let mut b = GltfBuilder::new();
+    let p = skinned_primitive(&mut b);
+    let acc = p.attributes["POSITION"];
+    b.gltf.accessors.as_mut().unwrap()[acc].count = usize::MAX;
+    let mut p = p;
+    let t = MorphTarget::new().with_positions(vec![0.0; 9]);
+    let e = b.attach_morph_targets(&mut p, &[t]).unwrap_err();
+    assert!(matches!(e, GltfError::InvalidInput(_)), "{e}");
 }

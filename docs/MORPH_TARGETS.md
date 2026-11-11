@@ -151,13 +151,88 @@ primitive) rejects, with a message naming the target:
 - a primitive with no valid `POSITION`
 - delta arrays that are not exactly `3 * vertex_count` floats, or contain non-finite values
 - normal deltas on a primitive with no base `NORMAL`
-- tangent deltas (not supported yet)
+- tangent deltas on a primitive with no base `TANGENT`
+- sparse deltas with no entries, indices that are not strictly increasing or reach the vertex
+  count, or not exactly three values per index
 
 `add_morphable_mesh` additionally requires every primitive to have the same non-zero number of
 targets, and `default_weights` and `target_names` (when given) to match that count.
 `set_node_weights` requires a node whose mesh has morph targets.
 
-Position delta accessors carry `min`/`max` computed from the deltas.
+Position delta accessors carry `min`/`max` computed from the deltas (for sparse ones, from the
+dense result including the implicit zeros).
+
+## Tangent deltas
+
+A target may carry tangent deltas if the base primitive has `TANGENT` (4 floats per vertex, `w`
+is the handedness). Deltas are `x, y, z` only (VEC3): `w` is never morphed.
+
+```rust
+use mesh_tools::mesh::MeshBuilder;
+use mesh_tools::{GltfBuilder, MorphTarget};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut builder = GltfBuilder::new();
+let build = |tangents: Option<Vec<f32>>| {
+    let mut m = MeshBuilder::new(None)
+        .with_positions(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        .with_normals(vec![0.0, 0.0, 1.0].repeat(3))
+        .with_indices(vec![0, 1, 2])
+        .with_morph_targets(vec![MorphTarget::new().with_tangents(vec![0.0, 0.5, 0.0].repeat(3))]);
+    if let Some(t) = tangents {
+        m = m.with_tangents(t);
+    }
+    m
+};
+// Without a base TANGENT the target is rejected and nothing is written.
+assert!(build(None).build_into(&mut builder).is_err());
+build(Some(vec![1.0, 0.0, 0.0, 1.0].repeat(3))).build_into(&mut builder)?;
+# Ok(())
+# }
+```
+
+## Sparse deltas
+
+Most targets move only a few vertices. A sparse delta stores just those: strictly increasing
+vertex `indices` and three values each. It is written as a glTF sparse accessor with no
+`bufferView`, so every other vertex reads as zero. Sparse and dense deltas decode identically.
+
+```rust
+use mesh_tools::{GltfBuilder, MorphDelta, MorphTarget, PrimitiveSpec};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut builder = GltfBuilder::new();
+let mut prim = builder.create_primitive(PrimitiveSpec {
+    positions: vec![0.0; 18], // 6 vertices (one non-indexed triangle pair)
+    ..Default::default()
+})?;
+
+// Vertices 1 and 3 move; 0, 2 and 4 stay.
+let a = MorphTarget::new().with_sparse_positions(vec![1, 3], vec![0.0, 1.0, 0.0, 0.0, 2.0, 0.0]);
+
+// From a dense array: exact zeros are dropped; `Some(eps)` also drops |delta| <= eps (lossy,
+// only on request). Nothing left is an error.
+let dense = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+let b = MorphTarget::new().with_position_delta(MorphDelta::sparse_from_dense(&dense, None)?);
+assert_eq!(a.positions, b.positions);
+
+// From absolute morphed positions: deltas = morphed - base.
+let base = [0.0; 18];
+let mut morphed = [0.0; 18];
+morphed[4] = 1.0;
+let delta = MorphDelta::from_absolute(&base, &morphed)?; // dense deltas, 18 floats
+let c = MorphTarget::new().with_positions(delta);
+
+// Invalid sparse data is rejected before anything is written.
+let bad = MorphTarget::new().with_sparse_positions(vec![3, 1], vec![0.0; 6]);
+assert!(builder.attach_morph_targets(&mut prim, &[bad]).is_err());
+builder.attach_morph_targets(&mut prim, &[a, c])?;
+# Ok(())
+# }
+```
+
+`with_sparse_normals` and `with_sparse_tangents` work the same way, and `with_normal_delta` /
+`with_tangent_delta` take a `MorphDelta`.
 
 ## Validation
 
@@ -178,11 +253,10 @@ A non-finite weight would otherwise be written as `null`; it is an error instead
 
 ## Limits
 
-- Only `POSITION` and `NORMAL` deltas. Tangent deltas are rejected because the library cannot
-  create base `TANGENT` attributes.
-- No sparse accessors, which are the standard way to store mostly-zero targets compactly.
-  Every delta is stored in full.
-- Delta accessors are always FLOAT; normalized integer types are not written.
+- `POSITION`, `NORMAL` and `TANGENT` deltas only. Custom `_APP` attribute deltas are not
+  supported by the builder (the validator accepts them in hand-built documents).
+- Delta accessors are always FLOAT. Normalized-integer deltas need `KHR_mesh_quantization`,
+  which is not implemented; the validator rejects them (`MORPH_TARGET_TYPE`).
 - The generator shapes (`create_box`, `create_sphere`, ...) have no morph parameter and add
   their meshes directly. Prefer `MeshBuilder` or `create_skinned_primitive`. A generated mesh can
   still be morphed by taking its primitive out of `builder.gltf.meshes`, calling

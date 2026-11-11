@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.15.0
+
+Morph target tangents and sparse deltas. The README Morph Targets row is now Full (core `FLOAT`
+deltas; normalized-integer deltas need `KHR_mesh_quantization`, which is not implemented). Output
+of existing code is byte-identical.
+
+### Added
+- Tangent deltas: `MorphTarget::with_tangents` is now accepted when the base primitive has
+  `TANGENT` (written as a FLOAT VEC3 accessor, `w` is not morphed). Without a base `TANGENT` the
+  error names the target.
+- `MorphDelta { Dense, Sparse { indices, values } }`; `MorphTarget::with_sparse_positions`,
+  `with_sparse_normals`, `with_sparse_tangents`, `with_position_delta`, `with_normal_delta`,
+  `with_tangent_delta`. Sparse deltas use the sparse accessor writer (no `bufferView`; position
+  `min`/`max` are those of the dense zero-filled result).
+- `MorphDelta::from_absolute(base, morphed)` and `MorphDelta::sparse_from_dense(deltas, epsilon)`.
+  Without epsilon only exact zeros are dropped, so the result is lossless; a lossy threshold must
+  be requested explicitly. Both error on bad lengths, non-finite values and (for the latter) an
+  empty result.
+- docs/MORPH_TARGETS.md: tangent and sparse sections (doctested).
+- Validator: warning `ACCESSOR_NO_DATA` (accessor with neither `bufferView` nor `sparse`, which reads as zeros); `MORPH_TARGET_TYPE` now names `KHR_mesh_quantization` for normalized-integer deltas.
+
+### Changed (breaking, pre-1.0)
+- `MorphTarget::{positions, normals, tangents}` are now `Option<MorphDelta>` instead of
+  `Option<Vec<f32>>`. The `with_positions` / `with_normals` / `with_tangents` builders still take
+  `Vec<f32>` (dense), so builder-style code is unaffected.
+
 ## 0.14.0
 
 Buffer encodings. The README Images row is now Full (core PNG/JPEG, `data:` URIs supported). Buffers

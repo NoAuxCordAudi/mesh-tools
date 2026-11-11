@@ -8,25 +8,129 @@
 //! primitives of one mesh must have the same number of targets.
 
 use crate::builder::GltfBuilder;
-use crate::accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget};
+use crate::accessor::{AccessorSpec, AccessorType, Bounds, BufferViewTarget, SparseSpec};
 use crate::error::{GltfError, Result};
 use crate::models::Primitive;
 use std::collections::HashMap;
 
+/// Deltas of one morph attribute: a full array, or only the vertices that move.
+///
+/// Both forms decode to the same dense `3 * vertex_count` floats; sparse storage writes a glTF
+/// sparse accessor (no `bufferView`, so unlisted vertices read as zero).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MorphDelta {
+    /// `x, y, z` per vertex.
+    Dense(Vec<f32>),
+    /// `values` holds `x, y, z` for each of the strictly increasing vertex `indices`.
+    Sparse {
+        /// Vertex indices that have a non-zero delta.
+        indices: Vec<u32>,
+        /// Three floats per index.
+        values: Vec<f32>,
+    },
+}
+
+impl MorphDelta {
+    /// Absolute-to-delta helper: `morphed - base`, per float.
+    ///
+    /// `base` and `morphed` are flat `x, y, z` arrays of equal length. For tangents pass the
+    /// `xyz` of the base tangent (drop `w`).
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if the lengths differ, are not a multiple of 3, an input is not
+    /// finite, or a difference overflows `f32`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::MorphDelta;
+    /// let d = MorphDelta::from_absolute(&[1.0, 2.0, 3.0], &[1.5, 2.0, 1.0]).unwrap();
+    /// assert_eq!(d, vec![0.5, 0.0, -2.0]);
+    /// assert!(MorphDelta::from_absolute(&[0.0; 3], &[0.0; 6]).is_err());
+    /// ```
+    pub fn from_absolute(base: &[f32], morphed: &[f32]) -> Result<Vec<f32>> {
+        if base.len() != morphed.len() {
+            return Err(invalid(format!("base has {} floats but morphed has {}", base.len(), morphed.len())));
+        }
+        if base.len() % 3 != 0 {
+            return Err(invalid(format!("{} floats is not a multiple of 3", base.len())));
+        }
+        let mut out = Vec::with_capacity(base.len());
+        for (i, (b, m)) in base.iter().zip(morphed).enumerate() {
+            let d = (*m as f64 - *b as f64) as f32;
+            if !b.is_finite() || !m.is_finite() || !d.is_finite() {
+                return Err(invalid(format!("value {i}: delta of {b} to {m} is not finite")));
+            }
+            out.push(d);
+        }
+        Ok(out)
+    }
+
+    /// Convert dense deltas to sparse by dropping vertices whose delta is zero.
+    ///
+    /// With `epsilon: None` only exact zeros (all three components) are dropped, so the result
+    /// decodes to exactly `deltas`. With `Some(e)` a vertex is dropped when every component has
+    /// `|c| <= e`: lossy, and only because the caller asked for it.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidInput` if `deltas.len()` is not a multiple of 3, a value is not finite,
+    /// `epsilon` is negative or not finite, or nothing is left (a sparse accessor needs at least
+    /// one entry; use no delta for that attribute instead).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::MorphDelta;
+    /// let dense = [0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.01, 0.0, 0.0];
+    /// let exact = MorphDelta::sparse_from_dense(&dense, None).unwrap();
+    /// assert_eq!(exact, MorphDelta::Sparse { indices: vec![1, 2], values: dense[3..].to_vec() });
+    /// let lossy = MorphDelta::sparse_from_dense(&dense, Some(0.01)).unwrap();
+    /// assert_eq!(lossy, MorphDelta::Sparse { indices: vec![1], values: vec![0.5, 0.0, 0.0] });
+    /// assert!(MorphDelta::sparse_from_dense(&[0.0; 3], None).is_err());
+    /// ```
+    pub fn sparse_from_dense(deltas: &[f32], epsilon: Option<f32>) -> Result<MorphDelta> {
+        if deltas.len() % 3 != 0 {
+            return Err(invalid(format!("{} floats is not a multiple of 3", deltas.len())));
+        }
+        if let Some(i) = deltas.iter().position(|v| !v.is_finite()) {
+            return Err(invalid(format!("delta value {i} is not finite")));
+        }
+        let eps = match epsilon {
+            Some(e) if !(e.is_finite() && e >= 0.0) => {
+                return Err(invalid(format!("epsilon {e} must be finite and >= 0")));
+            }
+            e => e.unwrap_or(0.0),
+        };
+        let (mut indices, mut values) = (Vec::new(), Vec::new());
+        for (v, e) in deltas.chunks_exact(3).enumerate() {
+            if e.iter().any(|c| c.abs() > eps) {
+                indices.push(v as u32);
+                values.extend_from_slice(e);
+            }
+        }
+        if indices.is_empty() {
+            return Err(invalid("all deltas are zero (or within epsilon): nothing to store sparsely".to_string()));
+        }
+        Ok(MorphDelta::Sparse { indices, values })
+    }
+}
+
 /// One morph target: per-vertex deltas for some of the base attributes.
 ///
-/// Deltas are flat `x, y, z` triples, one per vertex, in the same vertex order as the base
-/// primitive. A target must provide at least one attribute. Build one with
-/// [`MorphTarget::new`] and the `with_*` methods.
+/// Deltas are `x, y, z` triples, one per vertex, in the same vertex order as the base
+/// primitive; tangent deltas have no `w`. A target must provide at least one attribute. Build
+/// one with [`MorphTarget::new`] and the `with_*` methods.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct MorphTarget {
-    /// Position deltas (`3 * vertex_count` floats).
-    pub positions: Option<Vec<f32>>,
-    /// Normal deltas (`3 * vertex_count` floats). Requires a base `NORMAL`.
-    pub normals: Option<Vec<f32>>,
-    /// Tangent deltas. Not supported yet: attaching a target that sets this is an error.
-    pub tangents: Option<Vec<f32>>,
+    /// Position deltas.
+    pub positions: Option<MorphDelta>,
+    /// Normal deltas. Requires a base `NORMAL`.
+    pub normals: Option<MorphDelta>,
+    /// Tangent deltas (`xyz` only). Requires a base `TANGENT`.
+    pub tangents: Option<MorphDelta>,
 }
 
 impl MorphTarget {
@@ -35,23 +139,62 @@ impl MorphTarget {
         Self::default()
     }
 
-    /// Set the position deltas.
-    pub fn with_positions(mut self, deltas: Vec<f32>) -> Self {
-        self.positions = Some(deltas);
+    /// Set dense position deltas (`3 * vertex_count` floats).
+    pub fn with_positions(self, deltas: Vec<f32>) -> Self {
+        self.with_position_delta(MorphDelta::Dense(deltas))
+    }
+
+    /// Set dense normal deltas.
+    pub fn with_normals(self, deltas: Vec<f32>) -> Self {
+        self.with_normal_delta(MorphDelta::Dense(deltas))
+    }
+
+    /// Set dense tangent deltas (VEC3; requires a base `TANGENT`).
+    pub fn with_tangents(self, deltas: Vec<f32>) -> Self {
+        self.with_tangent_delta(MorphDelta::Dense(deltas))
+    }
+
+    /// Set sparse position deltas: `values` is `x, y, z` per strictly increasing `indices` entry.
+    pub fn with_sparse_positions(self, indices: Vec<u32>, values: Vec<f32>) -> Self {
+        self.with_position_delta(MorphDelta::Sparse { indices, values })
+    }
+
+    /// Set sparse normal deltas (see [`with_sparse_positions`](Self::with_sparse_positions)).
+    pub fn with_sparse_normals(self, indices: Vec<u32>, values: Vec<f32>) -> Self {
+        self.with_normal_delta(MorphDelta::Sparse { indices, values })
+    }
+
+    /// Set sparse tangent deltas (see [`with_sparse_positions`](Self::with_sparse_positions)).
+    pub fn with_sparse_tangents(self, indices: Vec<u32>, values: Vec<f32>) -> Self {
+        self.with_tangent_delta(MorphDelta::Sparse { indices, values })
+    }
+
+    /// Set position deltas from a [`MorphDelta`], for example from
+    /// [`MorphDelta::sparse_from_dense`].
+    pub fn with_position_delta(mut self, delta: MorphDelta) -> Self {
+        self.positions = Some(delta);
         self
     }
 
-    /// Set the normal deltas.
-    pub fn with_normals(mut self, deltas: Vec<f32>) -> Self {
-        self.normals = Some(deltas);
+    /// Set normal deltas from a [`MorphDelta`].
+    pub fn with_normal_delta(mut self, delta: MorphDelta) -> Self {
+        self.normals = Some(delta);
         self
     }
 
-    /// Set the tangent deltas (rejected when attaching, for now).
-    pub fn with_tangents(mut self, deltas: Vec<f32>) -> Self {
-        self.tangents = Some(deltas);
+    /// Set tangent deltas from a [`MorphDelta`].
+    pub fn with_tangent_delta(mut self, delta: MorphDelta) -> Self {
+        self.tangents = Some(delta);
         self
     }
+}
+
+/// What the base primitive offers to morph, for validation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MorphBase {
+    pub vertex_count: usize,
+    pub has_normals: bool,
+    pub has_tangents: bool,
 }
 
 fn invalid(msg: String) -> GltfError {
@@ -71,15 +214,18 @@ impl GltfBuilder {
     /// `GltfError::InvalidInput` (naming the target at fault) if:
     /// - `targets` is empty, or the primitive already has targets
     /// - the primitive has no valid `POSITION` accessor
-    /// - a target has no deltas, or sets `tangents` (not supported yet)
-    /// - a delta array is not exactly `3 * vertex_count` floats, or contains a non-finite value
-    /// - a target has normal deltas but the primitive has no base `NORMAL`
+    /// - a target has no deltas
+    /// - a dense delta array is not exactly `3 * vertex_count` floats, or contains a non-finite
+    ///   value; sparse indices are empty, not strictly increasing, out of range, or the values
+    ///   are not three per index or not finite
+    /// - a target has normal (tangent) deltas but the primitive has no base `NORMAL` (`TANGENT`)
     ///
     /// All validation runs before anything is written, so on error the document and the
     /// primitive are unchanged.
     ///
-    /// Each delta accessor is FLOAT `VEC3` with an `ARRAY_BUFFER` buffer view. `POSITION`
-    /// delta accessors carry `min`/`max` computed from the deltas.
+    /// Each dense delta accessor is FLOAT `VEC3` with an `ARRAY_BUFFER` buffer view. A sparse
+    /// one is a FLOAT `VEC3` sparse accessor without `bufferView`. `POSITION` delta accessors
+    /// carry `min`/`max` of the dense (zero-filled) result.
     pub fn attach_morph_targets(&mut self, primitive: &mut Primitive, targets: &[MorphTarget]) -> Result<()> {
         if targets.is_empty() {
             return Err(invalid("at least one morph target is required".to_string()));
@@ -88,21 +234,37 @@ impl GltfBuilder {
             return Err(invalid("the primitive already has morph targets".to_string()));
         }
         let vertex_count = self.base_position_count(primitive)?;
-        let has_base_normals = primitive.attributes.contains_key("NORMAL");
+        let base = MorphBase {
+            vertex_count,
+            has_normals: primitive.attributes.contains_key("NORMAL"),
+            has_tangents: primitive.attributes.contains_key("TANGENT"),
+        };
 
-        validate_targets(targets, vertex_count, has_base_normals)?;
+        validate_targets(targets, base)?;
 
         // ---- validated; write ----
         let mut maps = Vec::with_capacity(targets.len());
         for target in targets {
             let mut map = HashMap::new();
             let spec = AccessorSpec::new().with_target(BufferViewTarget::ArrayBuffer);
-            if let Some(d) = &target.positions {
-                let acc = self.write_slice(d, AccessorType::Vec3, &spec.clone().with_bounds(Bounds::Compute));
-                map.insert("POSITION".to_string(), acc);
-            }
-            if let Some(d) = &target.normals {
-                map.insert("NORMAL".to_string(), self.write_slice(d, AccessorType::Vec3, &spec));
+            let attrs = [
+                ("POSITION", &target.positions, spec.clone().with_bounds(Bounds::Compute)),
+                ("NORMAL", &target.normals, spec.clone()),
+                ("TANGENT", &target.tangents, spec),
+            ];
+            for (name, delta, spec) in attrs {
+                let Some(delta) = delta else { continue };
+                let acc = match delta {
+                    MorphDelta::Dense(d) => self.write_slice(d, AccessorType::Vec3, &spec),
+                    MorphDelta::Sparse { indices, values } => self.add_sparse_accessor(
+                        vertex_count,
+                        AccessorType::Vec3,
+                        None,
+                        SparseSpec::new(indices.clone(), values.clone()),
+                        spec,
+                    )?,
+                };
+                map.insert(name.to_string(), acc);
             }
             maps.push(map);
         }
@@ -197,7 +359,10 @@ impl GltfBuilder {
 /// Validate morph targets against a base primitive's vertex count and normals, without
 /// touching any document. Shared by `attach_morph_targets` and `MeshBuilder::build_into` so the
 /// latter can validate before writing the base primitive.
-pub(crate) fn validate_targets(targets: &[MorphTarget], vertex_count: usize, has_base_normals: bool) -> Result<()> {
+pub(crate) fn validate_targets(targets: &[MorphTarget], base: MorphBase) -> Result<()> {
+    let vertex_count = base.vertex_count;
+    // A hostile accessor count must not overflow the expected length.
+    let dense_len = vertex_count.checked_mul(3).ok_or_else(|| invalid(format!("vertex count {vertex_count} is too large")))?;
     if targets.is_empty() {
         return Err(invalid("at least one morph target is required".to_string()));
     }
@@ -205,27 +370,56 @@ pub(crate) fn validate_targets(targets: &[MorphTarget], vertex_count: usize, has
         if target.positions.is_none() && target.normals.is_none() && target.tangents.is_none() {
             return Err(invalid(format!("morph target {t} has no deltas")));
         }
-        if target.tangents.is_some() {
-            return Err(invalid(format!(
-                "morph target {t}: tangent deltas are not supported yet (base TANGENT attributes cannot be created)"
-            )));
-        }
-        if target.normals.is_some() && !has_base_normals {
+        if target.normals.is_some() && !base.has_normals {
             return Err(invalid(format!(
                 "morph target {t} has normal deltas but the primitive has no base NORMAL attribute"
             )));
         }
-        for (name, deltas) in [("position", &target.positions), ("normal", &target.normals)] {
-            let Some(d) = deltas else { continue };
-            if d.len() != vertex_count * 3 {
-                return Err(invalid(format!(
-                    "morph target {t}: {name} deltas have {} floats, expected {} (3 per vertex, {vertex_count} vertices)",
-                    d.len(),
-                    vertex_count * 3
-                )));
-            }
-            if let Some(i) = d.iter().position(|v| !v.is_finite()) {
-                return Err(invalid(format!("morph target {t}: {name} delta value {i} is not finite")));
+        if target.tangents.is_some() && !base.has_tangents {
+            return Err(invalid(format!(
+                "morph target {t} has tangent deltas but the primitive has no base TANGENT attribute"
+            )));
+        }
+        let attrs = [("position", &target.positions), ("normal", &target.normals), ("tangent", &target.tangents)];
+        for (name, delta) in attrs {
+            match delta {
+                None => {}
+                Some(MorphDelta::Dense(d)) => {
+                    if d.len() != dense_len {
+                        return Err(invalid(format!(
+                            "morph target {t}: {name} deltas have {} floats, expected {} (3 per vertex, {vertex_count} vertices)",
+                            d.len(),
+                            dense_len
+                        )));
+                    }
+                    if let Some(i) = d.iter().position(|v| !v.is_finite()) {
+                        return Err(invalid(format!("morph target {t}: {name} delta value {i} is not finite")));
+                    }
+                }
+                Some(MorphDelta::Sparse { indices, values }) => {
+                    let at = format!("morph target {t}: sparse {name} deltas");
+                    if indices.is_empty() {
+                        return Err(invalid(format!("{at} need at least one entry")));
+                    }
+                    if let Some(w) = indices.windows(2).position(|w| w[0] >= w[1]) {
+                        return Err(invalid(format!(
+                            "{at}: indices must be strictly increasing, but index {} ({}) is not above {}",
+                            w + 1, indices[w + 1], indices[w]
+                        )));
+                    }
+                    let last = indices[indices.len() - 1];
+                    if last as usize >= vertex_count {
+                        return Err(invalid(format!("{at}: index {last} is out of range for {vertex_count} vertices")));
+                    }
+                    if values.len() != indices.len() * 3 {
+                        return Err(invalid(format!(
+                            "{at}: {} values for {} indices, expected {}", values.len(), indices.len(), indices.len() * 3
+                        )));
+                    }
+                    if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+                        return Err(invalid(format!("{at}: value {i} is not finite")));
+                    }
+                }
             }
         }
     }

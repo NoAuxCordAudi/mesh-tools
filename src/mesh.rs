@@ -36,7 +36,7 @@
 
 use crate::builder::GltfBuilder;
 use crate::error::{GltfError, Result};
-use crate::builder_morph::{validate_targets, validate_weights_and_names, MorphTarget};
+use crate::builder_morph::{validate_targets, MorphBase, validate_weights_and_names, MorphTarget};
 use crate::builder_skin::{JointIndices, SkinSet};
 use crate::models::Primitive;
 use crate::primitive_spec::{ColorData, Indices, PrimitiveMode, PrimitiveSpec, TexCoords};
@@ -300,7 +300,12 @@ impl MeshBuilder {
         // leaves the document unchanged.
         match &self.morph_targets {
             Some(targets) => {
-                validate_targets(targets, self.positions.len() / 3, self.normals.is_some())?;
+                let base = MorphBase {
+                    vertex_count: self.positions.len() / 3,
+                    has_normals: self.normals.is_some(),
+                    has_tangents: self.tangents.is_some(),
+                };
+                validate_targets(targets, base)?;
                 validate_weights_and_names(targets.len(), self.default_weights.as_deref(), self.target_names.as_deref())?;
                 if let (Some(extras), Some(_)) = (&self.mesh_extras, &self.target_names) {
                     match extras.as_object() {
