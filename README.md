@@ -180,7 +180,7 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | Asset Information | ✅ Full | `version` 2.0, `generator` (settable or omitted), `copyright`, `minVersion`, and asset `extensions`/`extras`, with validation; see docs/EXTENSIONS.md |
 | | Scenes | ⚠️ Partial | Multiple scenes; the first scene added becomes the default (no API to change it) |
 | | Nodes | ⚠️ Partial | Hierarchies and TRS transforms; morph target `weights` overrides; the builder never sets `matrix`; no camera |
-| | Buffers | ⚠️ Partial | One embedded buffer exported as the GLB BIN chunk; no external `.bin` or data-URI export |
+| | Buffers | ⚠️ Partial | One embedded buffer (created on first data write) exported as the GLB BIN chunk; no external `.bin` or data-URI export |
 | | Buffer Views | ⚠️ Partial | `target` is set by the builder; `byteStride` exists in the model but the builder never writes it (no interleaved attributes) |
 | | Accessors | ⚠️ Partial | Builder emits FLOAT VEC2/3/4, u8/u16/u32 indices and joints, MAT4 inverse bind matrices, and animation data; no sparse or normalized accessors |
 | **Geometry** |||||

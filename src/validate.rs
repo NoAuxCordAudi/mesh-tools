@@ -3,6 +3,8 @@
 //! [`GltfBuilder::validate`] checks the document for structural glTF errors that the
 //! individual builder methods cannot see (because the document can also be edited through
 //! the public `gltf` field, and because some rules span several objects): dangling indices,
+//! buffers, buffer views (range, target, stride, alignment) and accessors (padded element sizes,
+//! checked arithmetic, so hand-edited `usize::MAX` values give errors, not panics),
 //! hierarchy problems, skin consistency, morph targets with their default and node weights and
 //! target names, and animation targets, including the output type and element count of every
 //! channel (`weights` channels are checked against the morph target count of the node's mesh).
@@ -19,6 +21,7 @@
 
 use crate::builder::GltfBuilder;
 use crate::builder_animation::{expected_output_count, interpolation_from_str, InterpolationType};
+use crate::constants::buffer_view_target;
 use crate::models::{Accessor, Mesh, Primitive};
 
 /// Result of [`GltfBuilder::validate`].
@@ -111,6 +114,7 @@ impl GltfBuilder {
         doc.check_extensions(&mut r);
         doc.check_buffers(&mut r);
         doc.check_accessors(&mut r);
+        doc.check_view_usage(&mut r);
         doc.check_meshes(&mut r);
         doc.check_morphs(&mut r);
         let parents = doc.check_hierarchy(&mut r);
@@ -225,22 +229,65 @@ impl<'a> Doc<'a> {
 
     fn check_buffers(&self, r: &mut ValidationReport) {
         let data_len = self.b.buffer_data.len();
-        match self.b.gltf.buffers.as_deref().and_then(|b| b.first()) {
-            Some(buf) if buf.byte_length != data_len => r.errors.push(format!(
-                "BUFFER_LENGTH_MISMATCH: buffer 0 declares {} bytes but {} are stored", buf.byte_length, data_len
-            )),
-            None if data_len > 0 => r.errors.push("BUFFER_MISSING: binary data exists but there is no buffer".to_string()),
-            _ => {}
+        let buffers = self.b.gltf.buffers.as_deref().unwrap_or(&[]);
+        if buffers.is_empty() && data_len > 0 {
+            r.errors.push("BUFFER_MISSING: binary data exists but there is no buffer".to_string());
+        }
+        for (i, buf) in buffers.iter().enumerate() {
+            if buf.byte_length == 0 {
+                r.errors.push(format!("BUFFER_EMPTY: buffer {i} has byteLength 0 (the minimum is 1)"));
+            } else if i == 0 && buf.byte_length != data_len {
+                r.errors.push(format!(
+                    "BUFFER_LENGTH_MISMATCH: buffer 0 declares {} bytes but {} are stored", buf.byte_length, data_len
+                ));
+            } else if i > 0 && buf.uri.is_none() {
+                // Only buffer 0 can be the GLB BIN chunk; a uri-less buffer has no stored data.
+                r.errors.push(format!(
+                    "BUFFER_LENGTH_MISMATCH: buffer {i} declares {} bytes but has no uri and no stored data", buf.byte_length
+                ));
+            }
         }
         for (i, v) in self.b.gltf.buffer_views.iter().flatten().enumerate() {
             if v.buffer != 0 {
                 r.errors.push(format!("BUFFER_VIEW_BUFFER_INVALID: buffer view {i} references buffer {}", v.buffer));
             }
-            if v.byte_offset + v.byte_length > data_len {
-                r.errors.push(format!(
-                    "BUFFER_VIEW_RANGE: buffer view {i} covers bytes {}..{} but the buffer has {data_len}",
-                    v.byte_offset, v.byte_offset + v.byte_length
-                ));
+            match v.byte_offset.checked_add(v.byte_length) {
+                Some(end) if end <= data_len => {}
+                Some(end) => r.errors.push(format!(
+                    "BUFFER_VIEW_RANGE: buffer view {i} covers bytes {}..{end} but the buffer has {data_len}", v.byte_offset
+                )),
+                None => r.errors.push(format!(
+                    "BUFFER_VIEW_RANGE: buffer view {i} offset {} + length {} overflows", v.byte_offset, v.byte_length
+                )),
+            }
+            if v.byte_length == 0 {
+                r.errors.push(format!("BUFFER_VIEW_LENGTH_ZERO: buffer view {i} has byteLength 0 (the minimum is 1)"));
+            }
+            if let Some(t) = v.target {
+                if t != buffer_view_target::ARRAY_BUFFER && t != buffer_view_target::ELEMENT_ARRAY_BUFFER {
+                    r.errors.push(format!(
+                        "BUFFER_VIEW_TARGET_INVALID: buffer view {i} target {t} is not 34962 (ARRAY_BUFFER) or 34963 (ELEMENT_ARRAY_BUFFER)"
+                    ));
+                }
+                if v.byte_offset % 4 != 0 {
+                    r.warnings.push(format!(
+                        "BUFFER_VIEW_OFFSET_ALIGNMENT: buffer view {i} has a target but byteOffset {} is not a multiple of 4; \
+                         GPU uploads may need a copy", v.byte_offset
+                    ));
+                }
+            }
+            if let Some(s) = v.byte_stride {
+                if !(4..=252).contains(&s) {
+                    r.errors.push(format!("BUFFER_VIEW_STRIDE_RANGE: buffer view {i} byteStride {s} is outside 4..=252"));
+                }
+                if s % 4 != 0 {
+                    r.errors.push(format!("BUFFER_VIEW_STRIDE_ALIGNMENT: buffer view {i} byteStride {s} is not a multiple of 4"));
+                }
+                if v.target == Some(buffer_view_target::ELEMENT_ARRAY_BUFFER) {
+                    r.errors.push(format!(
+                        "BUFFER_VIEW_STRIDE_ON_NON_VERTEX: buffer view {i} has byteStride but target ELEMENT_ARRAY_BUFFER"
+                    ));
+                }
             }
         }
     }
@@ -252,7 +299,7 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!("ACCESSOR_BUFFER_VIEW_INVALID: accessor {i} references buffer view {}", a.buffer_view));
                 continue;
             };
-            let Some(elem) = element_size(a.component_type, &a.type_) else {
+            let (Some(elem), Some(comp)) = (element_size(a.component_type, &a.type_), component_size(a.component_type)) else {
                 r.errors.push(format!(
                     "ACCESSOR_TYPE_INVALID: accessor {i} has component type {} and type {:?}", a.component_type, a.type_
                 ));
@@ -262,12 +309,90 @@ impl<'a> Doc<'a> {
                 r.errors.push(format!("ACCESSOR_COUNT_ZERO: accessor {i} has no elements"));
                 continue;
             }
-            let stride = view.byte_stride.unwrap_or(elem);
-            let end = a.byte_offset.unwrap_or(0) + stride * (a.count - 1) + elem;
-            if end > view.byte_length {
+            let off = a.byte_offset.unwrap_or(0);
+            if off % comp != 0 {
                 r.errors.push(format!(
-                    "ACCESSOR_RANGE: accessor {i} needs {end} bytes but buffer view {} has {}", a.buffer_view, view.byte_length
+                    "ACCESSOR_OFFSET_ALIGNMENT: accessor {i} byteOffset {off} is not a multiple of its component size {comp}"
                 ));
+            } else if view.byte_offset.checked_add(off).is_some_and(|abs| abs % comp != 0) {
+                r.errors.push(format!(
+                    "ACCESSOR_OFFSET_ALIGNMENT: accessor {i} buffer view offset {} + byteOffset {off} is not a multiple of its component size {comp}",
+                    view.byte_offset
+                ));
+            }
+            if let Some(s) = view.byte_stride {
+                if s % comp != 0 {
+                    r.errors.push(format!(
+                        "ACCESSOR_STRIDE_ALIGNMENT: accessor {i} sits in a view with byteStride {s}, not a multiple of its component size {comp}"
+                    ));
+                }
+                if s < elem {
+                    r.errors.push(format!(
+                        "BUFFER_VIEW_STRIDE_TOO_SMALL: byteStride {s} of buffer view {} is smaller than the {elem}-byte elements of accessor {i}",
+                        a.buffer_view
+                    ));
+                }
+            }
+            let stride = view.byte_stride.unwrap_or(elem);
+            let end = stride
+                .checked_mul(a.count - 1)
+                .and_then(|span| span.checked_add(elem))
+                .and_then(|span| span.checked_add(off));
+            if !end.is_some_and(|e| e <= view.byte_length) {
+                let need = end.map_or_else(|| "an overflowing number of".to_string(), |e| e.to_string());
+                r.errors.push(format!(
+                    "ACCESSOR_RANGE: accessor {i} needs {need} bytes but buffer view {} has {}", a.buffer_view, view.byte_length
+                ));
+            }
+        }
+    }
+
+    /// Every accessor used as indices or as a vertex attribute (morph targets included) must sit
+    /// in a view whose target, if any, matches that use; index data cannot be strided.
+    fn check_view_usage(&self, r: &mut ValidationReport) {
+        let views = self.b.gltf.buffer_views.as_deref().unwrap_or(&[]);
+        let view_of = |acc: usize| self.accessors.get(acc).and_then(|a| views.get(a.buffer_view).map(|v| (a.buffer_view, v)));
+        for (mi, m) in self.meshes.iter().enumerate() {
+            for (pi, p) in m.primitives.iter().enumerate() {
+                if let Some((vi, v)) = p.indices.and_then(view_of) {
+                    if v.target == Some(buffer_view_target::ARRAY_BUFFER) {
+                        r.errors.push(format!(
+                            "BUFFER_VIEW_TARGET_MISMATCH: mesh {mi} primitive {pi} indices use buffer view {vi}, whose target is ARRAY_BUFFER"
+                        ));
+                    }
+                    if v.byte_stride.is_some() {
+                        r.errors.push(format!(
+                            "BUFFER_VIEW_STRIDE_ON_NON_VERTEX: mesh {mi} primitive {pi} indices use buffer view {vi}, which has a byteStride"
+                        ));
+                    }
+                }
+                let targets = p.targets.iter().flatten();
+                for (name, &acc) in p.attributes.iter().chain(targets.flat_map(|t| t.iter())) {
+                    if let Some((vi, v)) = view_of(acc) {
+                        if v.target == Some(buffer_view_target::ELEMENT_ARRAY_BUFFER) {
+                            r.errors.push(format!(
+                                "BUFFER_VIEW_TARGET_MISMATCH: mesh {mi} primitive {pi} {name} uses buffer view {vi}, whose target is ELEMENT_ARRAY_BUFFER"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        // Animation samplers and inverse bind matrices are non-vertex data: no byteStride (3.6.2.4)
+        let anim_accessors = self.b.gltf.animations.iter().flatten().enumerate().flat_map(|(ai, an)| {
+            an.samplers.iter().flatten().enumerate().flat_map(move |(si, s)| {
+                [(format!("animation {ai} sampler {si} input"), s.input), (format!("animation {ai} sampler {si} output"), s.output)]
+            })
+        });
+        let ibm_accessors = self.b.gltf.skins.iter().flatten().enumerate()
+            .filter_map(|(si, s)| s.inverse_bind_matrices.map(|a| (format!("skin {si} inverseBindMatrices"), a)));
+        for (what, acc) in anim_accessors.chain(ibm_accessors) {
+            if let Some((vi, v)) = view_of(acc) {
+                if v.byte_stride.is_some() {
+                    r.errors.push(format!(
+                        "BUFFER_VIEW_STRIDE_ON_NON_VERTEX: {what} accessor {acc} uses buffer view {vi}, which has a byteStride"
+                    ));
+                }
             }
         }
     }
@@ -536,33 +661,38 @@ impl<'a> Doc<'a> {
         }
     }
 
-    fn accessor_bytes(&self, index: usize) -> Option<(&Accessor, &[u8])> {
+    /// Iterate the elements of accessor `index`, honouring the view's `byteStride`. Each item is
+    /// one element's bytes. `None` if the accessor, its view or its range is invalid.
+    fn accessor_elements(&self, index: usize) -> Option<(&Accessor, impl Iterator<Item = &[u8]>)> {
         let a = self.accessors.get(index)?;
         let view = self.b.gltf.buffer_views.as_ref()?.get(a.buffer_view)?;
         let elem = element_size(a.component_type, &a.type_)?;
-        let start = view.byte_offset + a.byte_offset.unwrap_or(0);
+        let start = view.byte_offset.checked_add(a.byte_offset.unwrap_or(0))?;
         let stride = view.byte_stride.unwrap_or(elem);
-        let end = start + stride * a.count.checked_sub(1)? + elem;
+        let end = stride.checked_mul(a.count.checked_sub(1)?)?.checked_add(elem)?.checked_add(start)?;
+        if end > view.byte_offset.checked_add(view.byte_length)? {
+            return None;
+        }
         let data = self.b.buffer_data.get(start..end)?;
-        Some((a, data)).filter(|_| stride == elem) // only tightly packed data is decoded
+        Some((a, (0..a.count).map(move |i| &data[i * stride..i * stride + elem])))
     }
 
     fn read_joints(&self, index: usize) -> Option<Vec<[usize; 4]>> {
-        let (a, data) = self.accessor_bytes(index)?;
+        let (a, elems) = self.accessor_elements(index)?;
         if a.type_ != "VEC4" {
             return None;
         }
-        let vals: Vec<usize> = match a.component_type {
-            5121 => data.iter().map(|&v| v as usize).collect(),
-            5123 => data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]) as usize).collect(),
-            _ => return None,
-        };
-        Some(vals.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect())
+        match a.component_type {
+            5121 => Some(elems.map(|e| [e[0] as usize, e[1] as usize, e[2] as usize, e[3] as usize]).collect()),
+            5123 => Some(elems.map(|e| std::array::from_fn(|k| u16::from_le_bytes([e[2 * k], e[2 * k + 1]]) as usize)).collect()),
+            _ => None,
+        }
     }
 
     fn read_f32(&self, index: usize) -> Option<Vec<f32>> {
-        let (a, data) = self.accessor_bytes(index)?;
-        (a.component_type == 5126).then(|| data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+        let (a, elems) = self.accessor_elements(index)?;
+        (a.component_type == 5126)
+            .then(|| elems.flat_map(|e| e.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))).collect())
     }
 
     fn check_animations(&self, r: &mut ValidationReport) {
@@ -738,23 +868,30 @@ fn joint_sets(p: &Primitive) -> Vec<usize> {
     v
 }
 
+fn component_size(component_type: usize) -> Option<usize> {
+    match component_type {
+        5120 | 5121 => Some(1),
+        5122 | 5123 => Some(2),
+        5125 | 5126 => Some(4),
+        _ => None,
+    }
+}
+
+/// Bytes per element. Matrix columns are padded to 4-byte boundaries (glTF 3.6.2.4), so
+/// MAT2 BYTE is 8, MAT3 BYTE is 12 and MAT3 SHORT is 24.
 fn element_size(component_type: usize, type_: &str) -> Option<usize> {
-    let comp = match component_type {
-        5120 | 5121 => 1,
-        5122 | 5123 => 2,
-        5125 | 5126 => 4,
+    let comp = component_size(component_type)?;
+    let (cols, rows) = match type_ {
+        "SCALAR" => return Some(comp),
+        "VEC2" => return Some(comp * 2),
+        "VEC3" => return Some(comp * 3),
+        "VEC4" => return Some(comp * 4),
+        "MAT2" => (2, 2),
+        "MAT3" => (3, 3),
+        "MAT4" => (4, 4),
         _ => return None,
     };
-    let n = match type_ {
-        "SCALAR" => 1,
-        "VEC2" => 2,
-        "VEC3" => 3,
-        "VEC4" | "MAT2" => 4,
-        "MAT3" => 9,
-        "MAT4" => 16,
-        _ => return None,
-    };
-    Some(comp * n)
+    Some((comp * rows).div_ceil(4) * 4 * cols)
 }
 
 /// Topmost ancestor of `node`, or `None` if the parent chain loops.
@@ -782,3 +919,6 @@ fn is_ancestor_or_self(parents: &[Option<usize>], ancestor: usize, node: usize) 
     }
     false
 }
+
+#[cfg(test)]
+mod hardening_tests;

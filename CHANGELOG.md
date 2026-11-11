@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.8.0
+
+Buffer and view hardening (groundwork for the Buffers, Buffer Views and Accessors rows; no row
+becomes Full yet). Output for every document that contains data is byte-identical, pinned by golden
+tests for the box, plane and cylinder.
+
+### Fixed
+- Vertex, normal, texcoord and index bytes are written with `to_le_bytes` instead of
+  reinterpreting native-endian memory with `unsafe` (wrong on big-endian hosts).
+- The validator uses checked arithmetic for every buffer view, accessor and animation range, so
+  hand-edited values such as `usize::MAX` produce errors instead of panics.
+- `element_size` pads matrix columns to 4 bytes as the spec requires: MAT2 BYTE is 8, MAT3 BYTE is
+  12 and MAT3 SHORT is 24 bytes (previously unpadded, so `ACCESSOR_RANGE` was too lenient).
+- The validator decodes `JOINTS_n` / `WEIGHTS_n` honouring `byteStride`; strided data used to be
+  skipped silently, hiding `SKIN_JOINT_OUT_OF_RANGE`.
+
+### Added
+- `name` on `Buffer`, `BufferView` and `Accessor`, with `set_buffer_name`,
+  `set_buffer_view_name` and `set_accessor_name` (return `Err` for a missing index).
+- Validator errors `BUFFER_EMPTY`, `BUFFER_VIEW_LENGTH_ZERO`, `BUFFER_VIEW_TARGET_INVALID`,
+  `BUFFER_VIEW_STRIDE_RANGE` (4..=252), `BUFFER_VIEW_STRIDE_ALIGNMENT`,
+  `BUFFER_VIEW_STRIDE_ON_NON_VERTEX` (index, animation and inverse-bind-matrix data), `BUFFER_VIEW_STRIDE_TOO_SMALL`,
+  `BUFFER_VIEW_TARGET_MISMATCH`, `ACCESSOR_OFFSET_ALIGNMENT`, `ACCESSOR_STRIDE_ALIGNMENT`.
+  `BUFFER_VIEW_OFFSET_ALIGNMENT` is a warning (a view with a target whose byteOffset is not a
+  multiple of 4 is legal, but GPU uploads may need a copy).
+- `BUFFER_LENGTH_MISMATCH` now covers every buffer index: a buffer after the first with no `uri`
+  has no stored data.
+
+### Changed (breaking for hand-edited documents only)
+- Buffer 0 is created lazily by the first data write. An empty document now has no `buffers`
+  array (it used to emit an invalid zero-length buffer). Code that indexes
+  `gltf.buffers[0]` on an empty builder must check for presence.
+- The validator is stricter on hand-edited documents (new codes above). Builder-made documents are
+  unaffected.
+
 ## 0.7.0
 
 Model groundwork for extensions/extras (part of the "Custom Extensions" and "Asset Information"

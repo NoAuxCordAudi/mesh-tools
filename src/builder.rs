@@ -82,16 +82,7 @@ impl GltfBuilder {
         gltf.samplers = Some(Vec::new());
         gltf.skins = Some(Vec::new());
         
-        // Create initial buffer in buffer list
-        let buffer = Buffer {
-            byte_length: 0, // Will be updated during export
-            uri: None,     // Will be embedded in GLB
-            ..Default::default()
-        };
-        
-        if let Some(buffers) = &mut gltf.buffers {
-            buffers.push(buffer);
-        }
+        // Buffer 0 is created lazily by the first data write (an empty buffer is invalid glTF)
         
         GltfBuilder {
             gltf,
@@ -346,14 +337,80 @@ impl GltfBuilder {
         
         self.buffer_data.extend_from_slice(data);
         
-        // Update the buffer size in the glTF model
-        if let Some(buffers) = &mut self.gltf.buffers {
-            if !buffers.is_empty() {
-                buffers[0].byte_length = self.buffer_data.len();
-            }
+        // Create buffer 0 on first use and keep its length in step with the data
+        let buffers = self.gltf.buffers.get_or_insert_with(Vec::new);
+        if buffers.is_empty() {
+            buffers.push(Buffer::default());
         }
+        buffers[0].byte_length = self.buffer_data.len();
         
         (byte_offset, byte_length)
+    }
+
+    /// Set or clear the `name` of buffer `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the buffer does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// assert!(b.set_buffer_name(0, Some("geometry".into())).is_err()); // no buffer yet
+    /// b.create_box(1.0);
+    /// b.set_buffer_name(0, Some("geometry".into())).unwrap();
+    /// ```
+    pub fn set_buffer_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.buffers.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.buffers.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("buffer {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
+    }
+
+    /// Set or clear the `name` of buffer view `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the buffer view does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// b.create_box(1.0);
+    /// b.set_buffer_view_name(0, Some("positions".into())).unwrap();
+    /// assert!(b.set_buffer_view_name(999, None).is_err());
+    /// ```
+    pub fn set_buffer_view_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.buffer_views.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.buffer_views.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("buffer view {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
+    }
+
+    /// Set or clear the `name` of accessor `index`.
+    ///
+    /// # Errors
+    ///
+    /// `GltfError::InvalidData` if the accessor does not exist. The document is unchanged on error.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// b.create_box(1.0);
+    /// b.set_accessor_name(0, Some("POSITION".into())).unwrap();
+    /// assert!(b.set_accessor_name(999, None).is_err());
+    /// ```
+    pub fn set_accessor_name(&mut self, index: usize, name: Option<String>) -> Result<()> {
+        let n = self.gltf.accessors.as_ref().map_or(0, |v| v.len());
+        let item = self.gltf.accessors.as_mut().and_then(|v| v.get_mut(index));
+        item.ok_or_else(|| GltfError::InvalidData(format!("accessor {index} does not exist ({n} present)")))?.name = name;
+        Ok(())
     }
 
     /// Validate the document, then serialize it to GLB bytes.

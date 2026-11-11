@@ -15,7 +15,7 @@ fn counts(b: &GltfBuilder) -> (usize, usize, usize) {
     (
         b.gltf.accessors.as_ref().map_or(0, |a| a.len()),
         b.gltf.buffer_views.as_ref().map_or(0, |a| a.len()),
-        b.gltf.buffers.as_ref().map_or(0, |a| a[0].byte_length),
+        b.gltf.buffers.as_ref().map_or(0, |a| a.first().map_or(0, |b| b.byte_length)),
     )
 }
 

@@ -52,10 +52,10 @@ fn well_formed_documents_pass_and_load_in_the_reference_loader() {
 #[test]
 fn empty_top_level_arrays_are_omitted_from_the_json() {
     let j = json_of(&GltfBuilder::new());
-    for key in ["scenes", "nodes", "meshes", "accessors", "bufferViews", "materials", "textures", "images", "samplers", "skins", "animations"] {
+    for key in ["buffers", "scenes", "nodes", "meshes", "accessors", "bufferViews", "materials", "textures", "images", "samplers", "skins", "animations"] {
         assert!(j.get(key).is_none(), "{key} must not serialize as an empty array");
     }
-    assert!(j.get("buffers").is_some() && j.get("asset").is_some());
+    assert!(j.get("buffers").is_none() && j.get("asset").is_some(), "buffer 0 is created lazily");
 }
 
 #[test]

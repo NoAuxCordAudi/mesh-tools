@@ -683,7 +683,8 @@ pub(crate) fn interpolation_from_str(s: &str) -> Option<InterpolationType> {
 /// stores three values (in-tangent, value, out-tangent) per keyframe. The builder and the
 /// validator both use this, so they cannot disagree.
 pub(crate) fn expected_output_count(keyframes: usize, interpolation: InterpolationType, width: usize) -> usize {
-    keyframes * width * if interpolation == InterpolationType::CubicSpline { 3 } else { 1 }
+    // saturating: hand-edited accessor counts must compare unequal, not overflow
+    keyframes.saturating_mul(width).saturating_mul(if interpolation == InterpolationType::CubicSpline { 3 } else { 1 })
 }
 
 /// Plain value tracks can't express cubic-spline tangents; never invent them silently.

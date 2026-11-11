@@ -350,13 +350,8 @@ impl GltfBuilder {
         let flat_positions: Vec<f32> = positions.iter().flat_map(|p| vec![p.x, p.y, p.z]).collect();
         
         // Add position data to buffer
-        let pos_bytes = unsafe {
-            std::slice::from_raw_parts(
-                flat_positions.as_ptr() as *const u8,
-                flat_positions.len() * std::mem::size_of::<f32>()
-            )
-        };
-        let (pos_offset, pos_length) = self.add_buffer_data(pos_bytes);
+        let pos_bytes = le_bytes(&flat_positions);
+        let (pos_offset, pos_length) = self.add_buffer_data(&pos_bytes);
         let pos_buffer_view = self.add_buffer_view(pos_offset, pos_length, Some(buffer_view_target::ARRAY_BUFFER));
         
         // Add position accessor
@@ -377,13 +372,8 @@ impl GltfBuilder {
             .collect();
             
         // Add index data to buffer
-        let idx_bytes = unsafe {
-            std::slice::from_raw_parts(
-                flat_indices.as_ptr() as *const u8,
-                flat_indices.len() * std::mem::size_of::<u32>()
-            )
-        };
-        let (idx_offset, idx_length) = self.add_buffer_data(idx_bytes);
+        let idx_bytes = le_bytes(&flat_indices);
+        let (idx_offset, idx_length) = self.add_buffer_data(&idx_bytes);
         let idx_buffer_view = self.add_buffer_view(idx_offset, idx_length, Some(buffer_view_target::ELEMENT_ARRAY_BUFFER));
         
         // Add index accessor
@@ -406,13 +396,8 @@ impl GltfBuilder {
             // Convert normals from Vector3 to flat array for buffer
             let flat_normals: Vec<f32> = normal_data.iter().flat_map(|n| vec![n.x, n.y, n.z]).collect();
             
-            let norm_bytes = unsafe {
-                std::slice::from_raw_parts(
-                    flat_normals.as_ptr() as *const u8,
-                    flat_normals.len() * std::mem::size_of::<f32>()
-                )
-            };
-            let (norm_offset, norm_length) = self.add_buffer_data(norm_bytes);
+            let norm_bytes = le_bytes(&flat_normals);
+            let (norm_offset, norm_length) = self.add_buffer_data(&norm_bytes);
             let norm_buffer_view = self.add_buffer_view(norm_offset, norm_length, Some(buffer_view_target::ARRAY_BUFFER));
             
             let normal_accessor = self.add_accessor(
@@ -435,13 +420,8 @@ impl GltfBuilder {
                 // Convert Vector2 to flat array for buffer
                 let flat_texcoords: Vec<f32> = texcoord_data.iter().flat_map(|uv| vec![uv.x, uv.y]).collect();
                 
-                let tc_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        flat_texcoords.as_ptr() as *const u8,
-                        flat_texcoords.len() * std::mem::size_of::<f32>()
-                    )
-                };
-                let (tc_offset, tc_length) = self.add_buffer_data(tc_bytes);
+                let tc_bytes = le_bytes(&flat_texcoords);
+                let (tc_offset, tc_length) = self.add_buffer_data(&tc_bytes);
                 let tc_buffer_view = self.add_buffer_view(tc_offset, tc_length, Some(buffer_view_target::ARRAY_BUFFER));
                 
                 let tc_accessor = self.add_accessor(
@@ -722,4 +702,29 @@ impl GltfBuilder {
         // Create the mesh using the types returned by the primitives module
         self.create_simple_mesh(None, &positions, &indices, Some(normals), Some(uvs), material)
     }
+}
+
+/// Little-endian bytes of a slice of 4-byte values, independent of the host byte order.
+trait ToLe: Copy {
+    fn push_le(self, out: &mut Vec<u8>);
+}
+
+impl ToLe for f32 {
+    fn push_le(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+impl ToLe for u32 {
+    fn push_le(self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+}
+
+fn le_bytes<T: ToLe>(values: &[T]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 4);
+    for &v in values {
+        v.push_le(&mut out);
+    }
+    out
 }

@@ -219,6 +219,9 @@ pub struct Primitive {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[non_exhaustive]
 pub struct Accessor {
+    /// Optional user-facing name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(rename = "bufferView")]
     pub buffer_view: usize,
     #[serde(rename = "componentType")]
@@ -253,6 +256,9 @@ pub struct Accessor {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[non_exhaustive]
 pub struct BufferView {
+    /// Optional user-facing name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub buffer: usize,
     #[serde(rename = "byteOffset")]
     pub byte_offset: usize,
@@ -279,6 +285,9 @@ pub struct BufferView {
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[non_exhaustive]
 pub struct Buffer {
+    /// Optional user-facing name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(rename = "byteLength")]
     pub byte_length: usize,
     
