@@ -1,3 +1,4 @@
+#![allow(deprecated)] // add_textured_material is kept for this demo; new code uses MaterialBuilder
 use mesh_tools::GltfBuilder;
 use std::error::Error;
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -169,7 +170,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                     // Default alpha mode
         None,                     // No alpha cutoff
         None                      // Not necessarily double sided
-    );
+    )?;
     
     let copper_material = builder.add_textured_material(
         Some("CopperMaterial".to_string()),
@@ -184,7 +185,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                      // Default alpha mode
         None,                      // No alpha cutoff
         None                       // Not necessarily double sided
-    );
+    )?;
     
     let brushed_aluminum_material = builder.add_textured_material(
         Some("BrushedAluminumMaterial".to_string()),
@@ -199,7 +200,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                        // Default alpha mode
         None,                        // No alpha cutoff
         None                         // Not necessarily double sided
-    );
+    )?;
     
     // 2. Material with metalness gradient texture
     let gradient_material = builder.add_textured_material(
@@ -215,7 +216,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                           // Default alpha mode
         None,                           // No alpha cutoff
         Some(true)                      // Make it double sided
-    );
+    )?;
     
     // 3. Material with patterned metalness
     let pattern_material = builder.add_textured_material(
@@ -231,7 +232,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                           // Default alpha mode
         None,                           // No alpha cutoff
         None                            // Not necessarily double sided
-    );
+    )?;
     
     // 4. Material with fingerprint metalness
     let fingerprint_material = builder.add_textured_material(
@@ -247,7 +248,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                             // Default alpha mode
         None,                             // No alpha cutoff
         None                              // Not necessarily double sided
-    );
+    )?;
     
     // Create geometry for each material
     

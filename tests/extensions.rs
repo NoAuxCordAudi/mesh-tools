@@ -375,9 +375,9 @@ fn morph_target_names_still_written_by_add_morphable_mesh() {
 #[test]
 fn specular_glossiness_output_is_unchanged() {
     let mut b = GltfBuilder::new();
-    let m = b.create_specular_material(Some("S".into()), [0.5, 0.25, 0.125, 1.0], [0.5, 0.25, 0.75], 0.25);
+    let m = b.create_specular_material(Some("S".into()), [0.5, 0.25, 0.125, 1.0], [0.5, 0.25, 0.75], 0.25).unwrap();
     assert_eq!(m, 0);
-    b.create_specular_material(None, [1.0; 4], [0.0; 3], 1.0);
+    b.create_specular_material(None, [1.0; 4], [0.0; 3], 1.0).unwrap();
     assert_eq!(b.gltf.extensions_used.as_deref().unwrap(), ["KHR_materials_pbrSpecularGlossiness"], "registered once");
 
     let raw = json_chunk(&b);

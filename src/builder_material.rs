@@ -94,11 +94,12 @@ impl GltfBuilder {
     /// Add a finished [`Material`](crate::Material) after checking it against the document.
     ///
     /// Checks the context-free rules of `MaterialBuilder::try_build` plus that every texture
-    /// slot references an existing texture. The material is not stored on error.
+    /// slot references an existing texture. The material is not stored on error. A material with
+    /// `KHR_materials_pbrSpecularGlossiness` registers it in `extensionsUsed` (once).
     ///
     /// # Errors
     /// `GltfError::InvalidMaterial` with a `MATERIAL_*` code (for example
-    /// `MATERIAL_TEXTURE_INVALID`). The document is unchanged on error.
+    /// `MATERIAL_TEXTURE_INVALID`, or `SG_TEXTURE_INVALID` for a specular-glossiness slot). The document is unchanged on error.
     ///
     /// ```
     /// use mesh_tools::{material::MaterialBuilder, GltfBuilder, GltfError};
@@ -117,6 +118,9 @@ impl GltfBuilder {
         let index = self.gltf.materials.as_ref().map_or(0, |m| m.len());
         if let Some(i) = material::check_material(&material, Some(textures)).into_iter().find(|i| !i.warning) {
             return Err(crate::error::GltfError::InvalidMaterial { index: Some(index), code: i.code, message: i.msg });
+        }
+        if material.extensions.as_ref().is_some_and(|e| e.pbr_specular_glossiness.is_some()) {
+            self.register_extension(crate::builder_extensions::SPEC_GLOSS);
         }
         self.gltf.materials.get_or_insert_with(Vec::new).push(material);
         Ok(index)

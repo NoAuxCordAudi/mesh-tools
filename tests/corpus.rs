@@ -9,6 +9,7 @@
 //! runs them that way. See docs/VALIDATION.md.
 //!
 //! Later milestones add their documents to `corpus()`.
+#![allow(deprecated)] // the deprecated shims are still covered here
 
 mod common;
 
@@ -74,11 +75,11 @@ fn materials_doc() -> GltfBuilder {
     let blend = b.add_textured_material(
         Some("Blend".into()), None, None, None, None, None, Some([0.1, 0.0, 0.0]),
         Some(0.0), Some(1.0), Some("BLEND".into()), None, Some(false),
-    );
+    ).unwrap();
     let mask = b.add_textured_material(
         Some("Mask".into()), None, None, None, None, None, None,
         Some(0.0), Some(1.0), Some("MASK".into()), Some(0.4), Some(true),
-    );
+    ).unwrap();
     let nodes: Vec<usize> = [a, m, blend, mask]
         .iter()
         .enumerate()
@@ -98,7 +99,7 @@ fn textured_doc() -> GltfBuilder {
     let mat = b.add_textured_material(
         Some("Tex".into()), Some(tex), None, Some(uv), Some(tex), Some(uv), Some([1.0, 1.0, 1.0]),
         Some(1.0), Some(1.0), None, None, None,
-    );
+    ).unwrap();
     let mesh = quad_mesh("TexQuad")
         .with_texcoords(vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0])
         .with_material(mat)
@@ -107,14 +108,34 @@ fn textured_doc() -> GltfBuilder {
     scene_of(b, mesh)
 }
 
+/// Specular-glossiness with a metallic-roughness fallback and a texture on TEXCOORD_1.
 fn specular_glossiness_doc() -> GltfBuilder {
+    use mesh_tools::{material::MaterialBuilder, PrimitiveSpec, SpecularGlossiness, TexCoords, TextureRef};
     let mut b = GltfBuilder::new();
     let tex = b.create_checkerboard_texture(8, 8, 2, [200, 200, 200], [20, 20, 20]).unwrap();
-    let mat = b.add_specular_glossiness_material(
-        Some("SG".into()), Some([0.8, 0.8, 0.8, 1.0]), Some(tex), Some([0.5, 0.5, 0.5]), Some(0.7),
-        None, None, None, None, None, None, None, None,
-    );
-    let mesh = b.create_box_with_material(1.0, Some(mat));
+    let m = MaterialBuilder::new(Some("SG".into()))
+        .with_base_color([0.8, 0.8, 0.8, 1.0])
+        .with_specular_glossiness(SpecularGlossiness {
+            diffuse_factor: Some([0.8, 0.8, 0.8, 1.0]),
+            diffuse_texture: Some(TextureRef::new(tex).with_tex_coord(1)),
+            specular_factor: Some([0.5, 0.5, 0.5]),
+            glossiness_factor: Some(0.7),
+            ..Default::default()
+        })
+        .try_build()
+        .unwrap();
+    let m = b.add_material_from(m).unwrap();
+    let uv = || TexCoords::F32(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+    let p = b
+        .create_primitive(PrimitiveSpec {
+            positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            normals: Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            texcoords: vec![uv(), uv()],
+            material: Some(m),
+            ..Default::default()
+        })
+        .unwrap();
+    let mesh = b.add_mesh_checked(None, vec![p], None).unwrap();
     scene_of(b, mesh)
 }
 

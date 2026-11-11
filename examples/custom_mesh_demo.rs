@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let checker_material = builder.create_textured_material(
         Some("Checker Material".to_string()),
         checker_texture
-    );
+    )?;
     
     // Define a simple triangle mesh with custom UV mapping using mint types
     let positions = vec![
@@ -115,7 +115,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let uv_test_material = builder.create_textured_material(
         Some("UV Test Material".to_string()),
         uv_test_texture
-    );
+    )?;
     
     // Pack multiple UV sets into a vector of Vector2 vectors
     let texcoord_sets = Some(vec![quad_texcoords_0, quad_texcoords_1]);

@@ -7,7 +7,25 @@ use crate::texture;
 use image::DynamicImage;
 
 impl GltfBuilder {
-    /// Add a material with a texture to the glTF document
+    /// Add a metallic-roughness material from texture indices (all sampled with `TEXCOORD_0`).
+    ///
+    /// Deprecated: use [`MaterialBuilder`](crate::material::MaterialBuilder) (per-slot `texCoord`,
+    /// scale, strength) and [`add_material_from`](GltfBuilder::add_material_from).
+    ///
+    /// # Errors
+    /// `GltfError::InvalidMaterial` for a dangling texture index, an out-of-range factor or an
+    /// invalid alpha mode (all previously accepted silently). The document is unchanged on error.
+    ///
+    /// ```
+    /// # #![allow(deprecated)]
+    /// use mesh_tools::GltfBuilder;
+    /// let mut b = GltfBuilder::new();
+    /// let bad = b.add_textured_material(None, Some(7), None, None, None, None, None, None, None, None, None, None);
+    /// assert!(bad.is_err());
+    /// let ok = b.add_textured_material(None, None, None, None, None, None, None, Some(0.5), None, None, None, None);
+    /// assert_eq!(ok.unwrap(), 0);
+    /// ```
+    #[deprecated(since = "0.13.0", note = "use `MaterialBuilder` and `add_material_from`")]
     pub fn add_textured_material(&mut self, name: Option<String>, 
                                base_color_texture: Option<usize>,
                                metallic_roughness_texture: Option<usize>,
@@ -19,10 +37,8 @@ impl GltfBuilder {
                                roughness_factor: Option<f32>,
                                alpha_mode: Option<String>,
                                alpha_cutoff: Option<f32>,
-                               double_sided: Option<bool>) -> usize {
-        use crate::material;
-        
-        let material = material::create_textured_material(
+                               double_sided: Option<bool>) -> Result<usize> {
+        let material = crate::material::create_textured_material(
             name,
             base_color_texture,
             metallic_roughness_texture,
@@ -36,34 +52,21 @@ impl GltfBuilder {
             alpha_cutoff,
             double_sided
         );
-        
-        if let Some(materials) = &mut self.gltf.materials {
-            let index = materials.len();
-            materials.push(material);
-            index
-        } else {
-            self.gltf.materials = Some(vec![material]);
-            0
-        }
+        self.add_material_from(material)
     }
     
-    /// Create a basic textured material
+    /// Create a basic textured material (base color texture, metallic and roughness 1.0).
+    ///
+    /// # Errors
+    /// `GltfError::InvalidMaterial` (`MATERIAL_TEXTURE_INVALID`) if the texture does not exist.
     pub fn create_textured_material(&mut self, name: Option<String>, 
-                                  base_color_texture: usize) -> usize {
-        self.add_textured_material(
-            name,
-            Some(base_color_texture),
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(1.0),
-            Some(1.0),
-            None,
-            None,
-            None
-        )
+                                  base_color_texture: usize) -> Result<usize> {
+        let material = crate::material::MaterialBuilder::new(name)
+            .with_base_color_texture(base_color_texture)
+            .with_metallic_factor(1.0)
+            .with_roughness_factor(1.0)
+            .build();
+        self.add_material_from(material)
     }
     
     /// Encode `image` as `format` and embed it as a new image (bytes in the binary buffer).

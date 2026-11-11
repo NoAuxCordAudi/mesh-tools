@@ -1,5 +1,6 @@
 //! Material slots, texCoord, scale/strength and alpha modes, read back through the independent
 //! `gltf` crate against hand-chosen values.
+#![allow(deprecated)] // the deprecated shims are still covered here
 
 mod common;
 
@@ -177,7 +178,7 @@ fn existing_textured_material_output_is_unchanged() {
     let t = five_textures(&mut b);
     let m = b.add_textured_material(
         None, Some(t[0]), Some(t[1]), Some(t[2]), Some(t[3]), Some(t[4]), None, None, None, None, None, None,
-    );
+    ).unwrap();
     let json = serde_json::to_string(&b.gltf.materials.as_ref().unwrap()[m]).unwrap();
     let expected = format!(
         r#"{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":{}}},"metallicRoughnessTexture":{{"index":{}}}}},"normalTexture":{{"index":{}}},"occlusionTexture":{{"index":{}}},"emissiveTexture":{{"index":{}}}}}"#,

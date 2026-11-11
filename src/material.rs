@@ -28,7 +28,10 @@
 //! ```
 
 use crate::error::{GltfError, Result};
-use crate::models::{Material, NormalTextureInfo, OcclusionTextureInfo, PbrMetallicRoughness, TextureInfo};
+use crate::models::{
+    Material, MaterialExtensions, NormalTextureInfo, OcclusionTextureInfo, PbrMetallicRoughness, PbrSpecularGlossiness,
+    TextureInfo,
+};
 
 /// A reference to a texture from a material slot: the texture index and the `TEXCOORD_n` set
 /// that samples it. A bare `usize` converts with set 0.
@@ -99,8 +102,54 @@ impl AlphaMode {
     }
 }
 
-/// The texture slots of a material as `(slot name, index, texCoord)` (core slots only).
-pub(crate) fn texture_slots(m: &Material) -> Vec<(&'static str, usize, usize)> {
+/// Specular-glossiness workflow of `KHR_materials_pbrSpecularGlossiness` (deprecated upstream;
+/// superseded by `KHR_materials_specular` + `KHR_materials_ior`, which this crate does not write).
+///
+/// Set it with [`MaterialBuilder::with_specular_glossiness`]. Absent factors take the spec
+/// defaults (diffuse `[1,1,1,1]`, specular `[1,1,1]`, glossiness 1). Add a metallic-roughness
+/// fallback to the same material for viewers that ignore the extension.
+///
+/// ```
+/// use mesh_tools::{material::MaterialBuilder, SpecularGlossiness, TextureRef};
+/// let m = MaterialBuilder::new(None)
+///     .with_base_color([0.5, 0.5, 0.5, 1.0]) // fallback
+///     .with_specular_glossiness(SpecularGlossiness {
+///         specular_factor: Some([0.5, 0.25, 0.125]),
+///         diffuse_texture: Some(TextureRef::new(0).with_tex_coord(1)),
+///         ..Default::default()
+///     })
+///     .try_build()
+///     .unwrap();
+/// assert!(m.extensions.unwrap().pbr_specular_glossiness.is_some());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SpecularGlossiness {
+    /// RGBA diffuse color, each component in [0, 1].
+    pub diffuse_factor: Option<[f32; 4]>,
+    /// Diffuse (RGB) and opacity (A) texture.
+    pub diffuse_texture: Option<TextureRef>,
+    /// RGB specular color, each component in [0, 1].
+    pub specular_factor: Option<[f32; 3]>,
+    /// Glossiness in [0, 1] (0 rough, 1 smooth).
+    pub glossiness_factor: Option<f32>,
+    /// Specular (RGB) and glossiness (A) texture.
+    pub specular_glossiness_texture: Option<TextureRef>,
+}
+
+impl SpecularGlossiness {
+    fn to_model(self) -> PbrSpecularGlossiness {
+        let mut m = PbrSpecularGlossiness::default();
+        m.diffuse_factor = self.diffuse_factor;
+        m.diffuse_texture = self.diffuse_texture.map(MaterialBuilder::info);
+        m.specular_factor = self.specular_factor;
+        m.glossiness_factor = self.glossiness_factor;
+        m.specular_glossiness_texture = self.specular_glossiness_texture.map(MaterialBuilder::info);
+        m
+    }
+}
+
+/// The core texture slots of a material as `(slot name, index, texCoord)`.
+fn core_texture_slots(m: &Material) -> Vec<(&'static str, usize, usize)> {
     let pbr = m.pbr_metallic_roughness.as_ref();
     [
         ("baseColorTexture", pbr.and_then(|p| p.base_color_texture.as_ref()).map(|t| (t.index, t.tex_coord))),
@@ -112,6 +161,25 @@ pub(crate) fn texture_slots(m: &Material) -> Vec<(&'static str, usize, usize)> {
     .into_iter()
     .filter_map(|(name, t)| t.map(|(i, c)| (name, i, c.unwrap_or(0))))
     .collect()
+}
+
+/// The specular-glossiness texture slots as `(slot name, index, texCoord)`.
+fn sg_texture_slots(m: &Material) -> Vec<(&'static str, usize, usize)> {
+    let Some(sg) = m.extensions.as_ref().and_then(|e| e.pbr_specular_glossiness.as_ref()) else { return Vec::new() };
+    [
+        ("diffuseTexture", sg.diffuse_texture.as_ref()),
+        ("specularGlossinessTexture", sg.specular_glossiness_texture.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(name, t)| t.map(|t| (name, t.index, t.tex_coord.unwrap_or(0))))
+    .collect()
+}
+
+/// All texture slots of a material (core and specular-glossiness).
+pub(crate) fn texture_slots(m: &Material) -> Vec<(&'static str, usize, usize)> {
+    let mut v = core_texture_slots(m);
+    v.extend(sg_texture_slots(m));
+    v
 }
 
 /// One finding of [`check_material`].
@@ -175,10 +243,35 @@ pub(crate) fn check_material(m: &Material, texture_count: Option<usize>) -> Vec<
         }
     }
 
+    // Specular-glossiness factors
+    if let Some(sg) = m.extensions.as_ref().and_then(|e| e.pbr_specular_glossiness.as_ref()) {
+        let vals = [
+            ("diffuseFactor", sg.diffuse_factor.as_ref().map(|c| &c[..])),
+            ("specularFactor", sg.specular_factor.as_ref().map(|c| &c[..])),
+            ("glossinessFactor", sg.glossiness_factor.as_ref().map(std::slice::from_ref)),
+        ];
+        for (what, v) in vals {
+            if let Some(v) = v {
+                unit(what, v, "SG_FACTOR_RANGE", &mut add);
+            }
+        }
+    }
+
+    if m.extensions.as_ref().is_some_and(|e| e.pbr_specular_glossiness.is_some()) && m.pbr_metallic_roughness.is_none() {
+        add(
+            "SG_WITHOUT_FALLBACK",
+            true,
+            "specular-glossiness without a pbrMetallicRoughness fallback; viewers that ignore the extension show the default material"
+                .to_string(),
+        );
+    }
+
     // Textures
-    for (slot, index, tex_coord) in texture_slots(m) {
+    let sg_slots = sg_texture_slots(m);
+    for (slot, index, tex_coord) in core_texture_slots(m).into_iter().chain(sg_slots.iter().copied()) {
         if let Some(n) = texture_count.filter(|&n| index >= n) {
-            add("MATERIAL_TEXTURE_INVALID", false, format!("{slot} references texture {index} ({n} present)"));
+            let code = if sg_slots.iter().any(|s| s.0 == slot) { "SG_TEXTURE_INVALID" } else { "MATERIAL_TEXTURE_INVALID" };
+            add(code, false, format!("{slot} references texture {index} ({n} present)"));
         }
         if tex_coord >= 2 {
             add(
@@ -325,6 +418,15 @@ impl MaterialBuilder {
     pub fn with_alpha_mode(mut self, mode: String, cutoff: Option<f32>) -> Self {
         self.material.alpha_mode = Some(mode);
         self.material.alpha_cutoff = cutoff;
+        self
+    }
+
+    /// Set the `KHR_materials_pbrSpecularGlossiness` workflow (deprecated upstream). Combine with
+    /// the metallic-roughness setters to also write a fallback. `GltfBuilder::add_material_from`
+    /// registers the extension in `extensionsUsed` (never `extensionsRequired`).
+    pub fn with_specular_glossiness(mut self, sg: SpecularGlossiness) -> Self {
+        self.material.extensions.get_or_insert_with(MaterialExtensions::default).pbr_specular_glossiness =
+            Some(sg.to_model());
         self
     }
 

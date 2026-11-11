@@ -1,3 +1,4 @@
+#![allow(deprecated)] // add_textured_material is kept for this demo; new code uses MaterialBuilder
 use mesh_tools::GltfBuilder;
 use std::error::Error;
 use image::{DynamicImage, ImageBuffer, Rgba};
@@ -145,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                     // Default alpha mode
         None,                     // No alpha cutoff
         None                      // Not necessarily double sided
-    );
+    )?;
     
     // 2. Green grid emissive material
     let green_grid_material = builder.add_textured_material(
@@ -161,7 +162,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                      // Default alpha mode
         None,                      // No alpha cutoff
         None                       // Not necessarily double sided
-    );
+    )?;
     
     // 3. Lava material
     let lava_material = builder.add_textured_material(
@@ -177,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         None,                     // Default alpha mode
         None,                     // No alpha cutoff
         None                      // Not necessarily double sided
-    );
+    )?;
     
     // Create meshes with emissive materials
     

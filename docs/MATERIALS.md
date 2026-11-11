@@ -51,6 +51,10 @@ assert_eq!(index, 0);
 | `MATERIAL_TEXCOORD_RANGE` | warning | `texCoord` 2 or higher; clients only have to support sets 0 and 1 |
 | `MATERIAL_NORMAL_SCALE_ZERO` | warning | normal scale 0 (legal, but flattens the map) |
 | `MATERIAL_UNUSED` | warning | no primitive uses the material |
+| `SG_FACTOR_RANGE` | error | a specular-glossiness diffuse, specular or glossiness component outside [0, 1] (non-finite values give `MATERIAL_FACTOR_NOT_FINITE`) |
+| `SG_TEXTURE_INVALID` | error | a specular-glossiness texture references a texture that does not exist |
+| `SG_EXTENSION_REQUIRED` | warning | `KHR_materials_pbrSpecularGlossiness` is listed in `extensionsRequired` |
+| `SG_WITHOUT_FALLBACK` | warning | a specular-glossiness material has no `pbrMetallicRoughness` fallback |
 
 ```rust
 use mesh_tools::{material::MaterialBuilder, GltfBuilder, GltfError};
@@ -61,6 +65,49 @@ let err = b
     .unwrap_err();
 assert!(matches!(err, GltfError::InvalidMaterial { code: "MATERIAL_TEXTURE_INVALID", .. }));
 ```
+
+## Specular-glossiness (deprecated extension)
+
+`KHR_materials_pbrSpecularGlossiness` is deprecated upstream in favour of
+`KHR_materials_specular` + `KHR_materials_ior`, which this crate does not write. It is write-only
+here. `MaterialBuilder::with_specular_glossiness(SpecularGlossiness { .. })` sets the diffuse and
+specular factors, glossiness and the two textures (each a `TextureRef`, so each has its own
+`texCoord`). The normal, occlusion and emissive slots are shared with the core model.
+
+Set the metallic-roughness properties on the same builder to write a fallback for viewers that
+ignore the extension. `add_material_from` registers the extension in `extensionsUsed` exactly
+once and never adds it to `extensionsRequired`.
+
+```rust
+use mesh_tools::{material::MaterialBuilder, GltfBuilder, GltfError, SpecularGlossiness, TextureRef};
+
+let mut b = GltfBuilder::new();
+let tex = b.create_uv_test_texture(16, 16).unwrap();
+let m = MaterialBuilder::new(Some("Plastic".into()))
+    .with_base_color([0.8, 0.1, 0.1, 1.0]) // fallback
+    .with_roughness_factor(0.3)
+    .with_specular_glossiness(SpecularGlossiness {
+        diffuse_factor: Some([0.8, 0.1, 0.1, 1.0]),
+        diffuse_texture: Some(TextureRef::new(tex).with_tex_coord(1)),
+        specular_factor: Some([0.5, 0.5, 0.5]),
+        glossiness_factor: Some(0.7),
+        ..Default::default()
+    })
+    .try_build()
+    .unwrap();
+b.add_material_from(m).unwrap();
+assert_eq!(b.gltf.extensions_used.as_deref().unwrap(), ["KHR_materials_pbrSpecularGlossiness"]);
+assert!(b.gltf.extensions_required.is_none());
+
+// glossiness outside [0, 1]
+let bad = MaterialBuilder::new(None)
+    .with_specular_glossiness(SpecularGlossiness { glossiness_factor: Some(2.0), ..Default::default() })
+    .try_build();
+assert!(matches!(bad, Err(GltfError::InvalidMaterial { code: "SG_FACTOR_RANGE", .. })));
+```
+
+`add_specular_glossiness_material` and `add_textured_material` are deprecated; they now return
+`Result` and reject the invalid input they used to store silently.
 
 ## Normalized texture coordinates
 

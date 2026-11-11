@@ -201,18 +201,18 @@ The following table shows the current coverage of the [glTF 2.0 specification](h
 | | PBR Materials | ✅ Full | Metallic-roughness model: all factors and the five texture slots with per-slot `texCoord` (`TextureRef`), normal scale, occlusion strength, `AlphaMode`, extras; `MaterialBuilder::try_build` and `add_material_from` check ranges and texture references; `MATERIAL_*` validation including missing `TEXCOORD_n` on primitives; see docs/MATERIALS.md. Extensions/extras inside texture infos are set through the public model fields |
 | | Alpha Modes | ✅ Full | Opaque, mask (with cutoff), blend modes via `AlphaMode`; invalid modes and cutoffs are rejected |
 | | Double Sided | ✅ Full | Flag for double-sided rendering |
-| | Material Variations | ⚠️ Partial | Metallic-roughness (per-slot `texCoord`, scale and strength) and specular-glossiness (KHR_materials_pbrSpecularGlossiness, whose textures still use `texCoord` 0) |
+| | Material workflows | ✅ Full | Metallic-roughness (core) and specular-glossiness (deprecated extension), with per-slot `texCoord`, scale and strength; see docs/MATERIALS.md. No other material extensions (`KHR_materials_variants`, clearcoat, sheen, transmission, unlit, ...) |
 | **Textures** |||||
 | | Samplers | ✅ Full | Typed `MagFilter`/`MinFilter`/`WrapMode` and `SamplerDesc` (all 108 combinations tested); `add_sampler`, `get_or_add_sampler` (dedup), one shared default sampler; `SAMPLER_*` and `TEXTURE_*` validation |
 | | Images | ⚠️ Partial | Embedded PNG/JPEG (`add_image`, `add_image_bytes`, `add_image_from_file`, magic-number and header checks) and external `uri` (`add_image_uri`); `data:` URIs are not supported yet, and WebP/KTX2 are out of scope |
-| | Texture Coordinates | ⚠️ Partial | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per core material slot, missing sets are validated; specular-glossiness textures still use set 0 |
+| | Texture Coordinates | ✅ Full | Multiple `TEXCOORD_n` sets (`f32`, normalized `u8`/`u16`) selectable per material slot, including the specular-glossiness textures; missing sets are validated (`MATERIAL_TEXCOORD_MISSING`). No `KHR_texture_transform` |
 | **Animation** |||||
 | | Animation | ⚠️ Partial | Translation, rotation, scale and morph target weights tracks with LINEAR, STEP and CUBICSPLINE interpolation |
 | | Skinning | ⚠️ Partial | Skins, computed inverse bind matrices, `JOINTS_n`/`WEIGHTS_n` (u8/u16 joints, f32 weights); no normalized integer weights |
 | **Cameras** |||||
 | | Cameras | ❌ None | Not yet implemented |
 | **Extensions** |||||
-| | KHR_materials_pbrSpecularGlossiness | ⚠️ Partial | Specular-glossiness workflow; texture `texCoord` is fixed to 0 |
+| | KHR_materials_pbrSpecularGlossiness | ✅ Full (write-only, deprecated upstream) | Factors, both textures with per-slot `texCoord`, `extensionsUsed` registration (never required), optional metallic-roughness fallback, `SG_*` validation. Superseded by `KHR_materials_specular` + `KHR_materials_ior` (not implemented) |
 | | KHR_materials_unlit | ❌ None | Not yet implemented |
 | | KHR_texture_transform | ❌ None | Not yet implemented |
 | | KHR_mesh_quantization | ❌ None | Not yet implemented |

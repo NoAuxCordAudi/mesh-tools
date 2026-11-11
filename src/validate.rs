@@ -358,6 +358,14 @@ impl<'a> Doc<'a> {
             }
         }
 
+        if required.unwrap_or(&[]).iter().any(|n| n == "KHR_materials_pbrSpecularGlossiness") {
+            r.warnings.push(
+                "SG_EXTENSION_REQUIRED: KHR_materials_pbrSpecularGlossiness is deprecated and should not be required; \
+                 list it only in extensionsUsed so viewers can fall back to metallic-roughness"
+                    .to_string(),
+            );
+        }
+
         // Serialization cannot fail for these plain data types; if it does, nothing is found.
         let mut found = std::collections::BTreeSet::new();
         if let Ok(doc) = serde_json::to_value(g) {

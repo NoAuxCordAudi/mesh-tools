@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.13.0
+
+Materials and texCoord, part 2 (specular-glossiness). The README rows PBR Materials, Texture
+Coordinates, Material workflows (was Material Variations) and KHR_materials_pbrSpecularGlossiness
+(write-only, deprecated upstream) are now Full. Output of existing code that used valid values is
+unchanged, except where noted.
+
+### Added
+- `SpecularGlossiness` and `MaterialBuilder::with_specular_glossiness`: factors plus both textures
+  as `TextureRef` (per-slot `texCoord`). Combine with the metallic-roughness setters for a fallback.
+- `add_material_from` registers `KHR_materials_pbrSpecularGlossiness` in `extensionsUsed` exactly
+  once; it is never added to `extensionsRequired`.
+- Validator errors `SG_FACTOR_RANGE`, `SG_TEXTURE_INVALID`; warnings `SG_EXTENSION_REQUIRED` and
+  `SG_WITHOUT_FALLBACK`. `MATERIAL_TEXCOORD_MISSING` now also covers the specular-glossiness slots.
+  (The plan's `SG_EXTENSION_NOT_DECLARED` is the existing `EXTENSION_NOT_DECLARED`.)
+
+### Changed (breaking, pre-1.0)
+- `add_specular_glossiness_material` and `add_textured_material` are deprecated and now return
+  `Result<usize>`: invalid factors, alpha modes and dangling texture indices are errors instead of
+  being stored. `create_specular_material` and `create_textured_material` now return `Result<usize>`
+  too. Examples were updated.
+- Specular-glossiness materials built by the old shims no longer write redundant defaults
+  (`texCoord` 0, normal `scale` 1, occlusion `strength` 1); the meaning is identical.
+- README: Material Variations renamed to Material workflows.
+
 ## 0.12.0
 
 Materials and texCoord, part 1 (core metallic-roughness). The README PBR Materials row is now Full;
