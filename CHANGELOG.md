@@ -4,6 +4,14 @@
 
 Morph targets (blend shapes) and morph target weights animation.
 
+### Fixed
+- `generate_cylinder` / `generate_cone` (and `create_cylinder` / `create_cone`): cap centre
+  vertices were indexed at `positions.len() / 3` instead of `positions.len()`, so caps fanned
+  from an unrelated vertex; side and cap triangles wound inward (clockwise from outside); sloped
+  side normals used the reciprocal slope (`h / (rb - rt)` instead of `(rb - rt) / h`), which also
+  flipped them; zero-radius caps and collapsed apex triangles produced zero-area faces and are
+  now skipped. Output geometry of these shapes changes accordingly.
+
 ### Breaking changes
 - `Primitive`, `Mesh` and `Node` gain public fields (`Primitive.targets`, `Mesh.weights`,
   `Mesh.extras`, `Node.weights`). Code that builds these structs with a struct literal must add

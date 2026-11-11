@@ -198,8 +198,8 @@ pub fn generate_cylinder(
     let mut uvs = Vec::new();
     let mut indices = Vec::new();
     
-    // Helper function to calculate slope normals
-    let get_slope_normal = |_radius: f32, slope_factor: f32, u: f32| -> (f32, f32, f32) {
+    // Outward side normal at angle fraction `u`: (cosθ, slope, sinθ), normalized.
+    let get_slope_normal = |slope_factor: f32, u: f32| -> (f32, f32, f32) {
         let sin_theta = (u * 2.0 * PI).sin();
         let cos_theta = (u * 2.0 * PI).cos();
         
@@ -213,12 +213,10 @@ pub fn generate_cylinder(
         (nx / length, ny / length, nz / length)
     };
     
-    // Calculate slope factor for cylinder sides
-    let slope_factor = if radius_top == radius_bottom {
-        0.0 // No slope for a perfect cylinder
-    } else {
-        height / (radius_bottom - radius_top)
-    };
+    // Slope term of the outward normal. The surface tangent in the (radius, y) plane is
+    // (radius_top - radius_bottom, height), so the outward normal is proportional to
+    // (height, radius_bottom - radius_top) there, i.e. y = (radius_bottom - radius_top) / height.
+    let slope_factor = (radius_bottom - radius_top) / height;
     
     // Generate vertices for the curved surface
     for y in 0..=height_segments {
@@ -237,7 +235,7 @@ pub fn generate_cylinder(
             positions.push(crate::compat::point3::new(radius * cos_theta, y_pos, radius * sin_theta));
             
             // Normal
-            let (nx, ny, nz) = get_slope_normal(radius, slope_factor, u);
+            let (nx, ny, nz) = get_slope_normal(slope_factor, u);
             normals.push(crate::compat::vector3::new(nx, ny, nz));
             
             // UV
@@ -256,14 +254,22 @@ pub fn generate_cylinder(
             let d = ((y + 1) * vertices_per_row + x) as u32;
             
             // Two triangles per grid cell
-            indices.push(Triangle::new(a, b, d));
-            indices.push(Triangle::new(b, c, d));
+            // Counter-clockwise when seen from outside the surface. A ring with zero radius
+            // collapses to a point; the triangle that would have two coincident corners is
+            // skipped instead of emitting a zero-area face.
+            if !(y == 0 && radius_bottom == 0.0) {
+                indices.push(Triangle::new(a, d, b));
+            }
+            if !(y == height_segments - 1 && radius_top == 0.0) {
+                indices.push(Triangle::new(b, d, c));
+            }
         }
     }
     
-    // If not open ended, add top and bottom caps
-    if !open_ended {
-        let start_index = positions.len() / 3;
+    // If not open ended, add top and bottom caps. A cap whose radius is zero (the apex of a
+    // cone) would be made of zero-area triangles, so it is skipped.
+    if !open_ended && radius_top > 0.0 {
+        let start_index = positions.len();
         
         // Top cap
         // Center vertex
@@ -297,13 +303,15 @@ pub fn generate_cylinder(
         for x in 0..radial_segments {
             indices.push(Triangle::new(
                 center_index,
-                center_index + (x + 1) as u32,
-                center_index + (x + 2) as u32
+                center_index + (x + 2) as u32,
+                center_index + (x + 1) as u32
             ));
         }
-        
+    }
+
+    if !open_ended && radius_bottom > 0.0 {
         // Bottom cap
-        let start_index = positions.len() / 3;
+        let start_index = positions.len();
         
         // Center vertex
         positions.push(crate::compat::point3::new(0.0, -height / 2.0, 0.0));
@@ -336,8 +344,8 @@ pub fn generate_cylinder(
         for x in 0..radial_segments {
             indices.push(Triangle::new(
                 center_index,
-                center_index + (x + 2) as u32,
-                center_index + (x + 1) as u32
+                center_index + (x + 1) as u32,
+                center_index + (x + 2) as u32
             ));
         }
     }
